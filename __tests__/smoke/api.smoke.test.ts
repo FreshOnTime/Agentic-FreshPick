@@ -51,6 +51,26 @@ describe('Smoke Tests - Critical API Endpoints', () => {
     }, timeout);
   });
 
+  describe('Agentic workspace', () => {
+    it('serves the assistant page without exposing private draft data', async () => {
+      const response = await fetch(`${BASE_URL}/assistant`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('FreshPick assistant');
+    }, timeout);
+
+    it('requires authentication for draft history', async () => {
+      const response = await fetch(`${BASE_URL}/api/agentic`);
+      expect(response.status).toBe(401);
+      expect(response.headers.get('cache-control')).toBe('private, no-store');
+    }, timeout);
+
+    it('rejects anonymous generation and cross-origin requests before model execution', async () => {
+      const request = { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(BASE_URL).origin }, body: JSON.stringify({ mode: 'shopping', message: 'Prepare a basket', budget: 1000 }) };
+      expect((await fetch(`${BASE_URL}/api/agentic`, request)).status).toBe(401);
+      expect((await fetch(`${BASE_URL}/api/agentic`, { ...request, headers: { ...request.headers, Origin: 'https://untrusted.example' } })).status).toBe(403);
+    }, timeout);
+  });
+
   describe('Categories API', () => {
     it('should retrieve categories list', async () => {
       const response = await fetch(`${BASE_URL}/api/categories`);
