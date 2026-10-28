@@ -8,12 +8,14 @@ Start with the [agentic architecture and rollout guide](docs/AGENTIC_ARCHITECTUR
 
 | New workflow | Current scope |
 | --- | --- |
-| Shopping assistant | Live catalog tools, budget including delivery, reviewed proposal, explicit confirmation to save a bag |
+| Shopping assistant | Live catalog tools, remembered follow-ups, editable quantities, rechecked totals and confirmed saved bags |
 | Producer studio | Text/photo listing drafts and missing-field checks; no automatic publishing |
 | Stock & freshness | On-demand low-stock and recorded sell-by recommendations; sampled, not scheduled |
 | Business purchasing | Catalog matching and saved RFQ drafts; no supplier sending or binding purchase orders |
 | Order help | Owned order lookup and explicitly confirmed support-case submission |
 | Bundles & retention | Aggregate sales/consent signals and campaign drafts; no automatic sending |
+
+Conversations can be resumed or deleted. Requests have durable retry receipts, and customers can revise or dismiss proposals before confirming. Apply the new conversation migration before deploying this update.
 
 AI is **disabled by default**. Use Node 22+, apply migrations, configure `AI_GATEWAY_API_KEY` and an available `AGENT_MODEL`, then set `AGENTIC_ENABLED=true` in a separate staging deployment. Provider execution and operational acceptance require live staging verification. Existing COD checkout remains authoritative; the assistant cannot purchase, refund, change stock or send campaigns.
 

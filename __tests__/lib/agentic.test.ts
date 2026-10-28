@@ -1,6 +1,6 @@
 import prisma from '@/lib/prisma';
 import { allowedModes, assertMode, basketInput, type Actor } from '@/lib/agentic/contracts';
-import { confirmDraft, quoteBasket, startRun } from '@/lib/agentic/service';
+import { confirmDraft, editDraft, quoteBasket, startRun } from '@/lib/agentic/service';
 import { createAgentTools } from '@/lib/agentic/tools';
 import { enquirySources } from '@/lib/contactEnquiries';
 
@@ -98,7 +98,7 @@ it('limits tool calls even when a model requests many in parallel', async () => 
 
 async function pendingDraft() {
   const payload = await quoteBasket(input);
-  return { id: 'draft-1', userId: customer.userId, status: 'pending', kind: 'basket', payload, expiresAt: new Date(Date.now() + 60_000), run: { status: 'completed' } };
+  return { id: 'draft-1', runId: 'run-1', title: 'Fruit bag', userId: customer.userId, status: 'pending', kind: 'basket', payload, expiresAt: new Date(Date.now() + 60_000), run: { status: 'completed', mode: 'shopping' } };
 }
 it('confirms a revalidated bag once and returns the receipt on retries', async () => {
   mock.agentDraft.findFirst.mockResolvedValue(await pendingDraft());
@@ -148,4 +148,36 @@ it('enforces a database-backed hourly quota before a model call', async () => {
   mock.agentRun.count.mockResolvedValue(20);
   await expect(startRun(customer, 'shopping')).rejects.toThrow('20 assistant requests');
   expect(mock.$executeRaw).toHaveBeenCalled(); expect(mock.agentRun.create).not.toHaveBeenCalled();
+});
+it('reprices edited quantities and supersedes the original without creating a bag', async () => {
+  mock.agentDraft.findFirst.mockResolvedValue(await pendingDraft());
+  mock.product.findMany.mockResolvedValue([{ ...product, price: 250 }]);
+  mock.agentDraft.create.mockImplementation(async ({ data }) => ({ ...data, id: 'revision-1' }));
+  const result = await editDraft(customer, 'draft-1', { action: 'revise', items: [{ productId, quantity: 1 }] });
+  expect(result).toMatchObject({ replacedId: 'draft-1', draft: { payload: { total: 325, budget: 1000 } } });
+  expect(mock.agentDraft.update).toHaveBeenCalledWith({ where: { id: 'draft-1' }, data: { status: 'superseded' } });
+  expect(mock.bag.create).not.toHaveBeenCalled();
+});
+it('keeps the existing budget and original draft when revision validation fails', async () => {
+  mock.agentDraft.findFirst.mockResolvedValue(await pendingDraft());
+  await expect(editDraft(customer, 'draft-1', { action: 'revise', items: [{ productId, quantity: 10 }] })).rejects.toThrow('above the approved budget');
+  await expect(editDraft(customer, 'draft-1', { action: 'revise', items: [{ productId: '00000000-0000-4000-8000-000000000002', quantity: 1 }] })).rejects.toThrow('new product');
+  expect(mock.agentDraft.update).not.toHaveBeenCalled(); expect(mock.agentDraft.create).not.toHaveBeenCalled();
+});
+it('blocks editing other owners, already confirmed drafts and unauthorized workspaces', async () => {
+  mock.agentDraft.findFirst.mockResolvedValue(null);
+  await expect(editDraft(customer, 'draft-1', { action: 'dismiss' })).rejects.toThrow('not found');
+  mock.agentDraft.findFirst.mockResolvedValue({ ...await pendingDraft(), status: 'confirmed' });
+  await expect(editDraft(customer, 'draft-1', { action: 'dismiss' })).rejects.toThrow('already been');
+  mock.agentDraft.findFirst.mockResolvedValue({ ...await pendingDraft(), run: { status: 'completed', mode: 'inventory' } });
+  await expect(editDraft(customer, 'draft-1', { action: 'dismiss' })).rejects.toThrow('cannot use');
+});
+it('dismisses a proposal without business writes and rejects confirming it later', async () => {
+  const draft = await pendingDraft();
+  mock.agentDraft.findFirst.mockResolvedValue(draft);
+  await editDraft(customer, draft.id, { action: 'dismiss' });
+  expect(mock.agentDraft.update).toHaveBeenCalledWith({ where: { id: draft.id }, data: { status: 'dismissed' } });
+  mock.agentDraft.findFirst.mockResolvedValue({ ...draft, status: 'dismissed' });
+  await expect(confirmDraft(customer, draft.id)).rejects.toThrow('not available');
+  expect(mock.bag.create).not.toHaveBeenCalled();
 });

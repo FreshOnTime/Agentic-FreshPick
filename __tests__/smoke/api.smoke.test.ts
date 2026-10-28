@@ -64,6 +64,12 @@ describe('Smoke Tests - Critical API Endpoints', () => {
       expect(response.headers.get('cache-control')).toBe('private, no-store');
     }, timeout);
 
+    it('protects conversation memory and proposal editing endpoints', async () => {
+      const id = '00000000-0000-4000-8000-000000000001';
+      expect((await fetch(`${BASE_URL}/api/agentic/conversations/${id}`)).status).toBe(401);
+      expect((await fetch(`${BASE_URL}/api/agentic/drafts/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: new URL(BASE_URL).origin }, body: JSON.stringify({ action: 'dismiss' }) })).status).toBe(401);
+    }, timeout);
+
     it('rejects anonymous generation and cross-origin requests before model execution', async () => {
       const request = { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(BASE_URL).origin }, body: JSON.stringify({ mode: 'shopping', message: 'Prepare a basket', budget: 1000 }) };
       expect((await fetch(`${BASE_URL}/api/agentic`, request)).status).toBe(401);

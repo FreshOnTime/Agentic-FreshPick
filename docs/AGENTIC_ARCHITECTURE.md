@@ -36,7 +36,7 @@ AI SDK 7.0.155 is pinned in the lockfile. The implementation uses its bundled `T
 | Customer support | Read the customer's own recent orders/status; draft a support case | Customer explicitly submits to the existing enquiry inbox. No cancellations/refunds or live courier integration |
 | Growth | Aggregate popular products over 30 days; count active email subscribers; save bundle/campaign copy | Draft-only. No customer contact lists, automatic replenishment, WhatsApp consent, audience dispatch or campaign sending |
 
-Requests are independent; prior messages are not replayed. Drafts persist across reloads. A vision-capable configured model is required for producer photos (one image/request, 2 MB UI limit). Images are sent as validated data URLs, not fetched from arbitrary hosts. The optional photo is not stored in the application DB. AI text remains untrusted and must be reviewed.
+Conversations persist across reloads and support follow-up requests. The server loads at most eight completed turns within a 24,000-character context budget, with compact historical proposal data. Older details may need to be restated. Prices, stock and order facts must be refreshed through live tools; prior confirmations do not authorize new actions. Drafts persist across reloads. A vision-capable configured model is required for producer photos (one image/request, 2 MB UI limit). Images are sent as validated data URLs, not fetched from arbitrary hosts. The optional photo is not stored in the application DB. AI text remains untrusted and must be reviewed.
 
 ## Data and permission boundaries
 
@@ -46,16 +46,21 @@ Requests are independent; prior messages are not replayed. Drafts persist across
 - All-in shopping budget is entered separately by the customer. The backend merges duplicate product IDs and uses integer pack quantities, authoritative discounted prices and delivery fees. Unknown pack size is explicitly unverified; catalog attributes need normalization before bulk kg conversion can be trusted.
 - A basket proposal expires after 30 minutes. Confirmation checks owner, completed run, expiry, current stock and unchanged quoted prices/pack details/delivery. Changed quotes require another review. Saved bags do not reserve stock; checkout still validates fulfillment and stock transactionally.
 - Confirmation runs in a serializable transaction, uses a PostgreSQL advisory lock per draft, stores a receipt and writes the audit log in the same transaction. A repeated confirmation returns the original result. Serialization conflicts return a retryable failure; a retry cannot create a second bag from the same draft.
+- Customers may adjust pack quantities or remove products, then explicitly request a fresh quote. Repricing validates live stock/prices, delivery and the original budget, creates a new proposal and marks the original superseded in one transaction. The old proposal cannot be confirmed. Dismissed proposals also cannot execute. Repricing an expired basket is allowed; confirming an expired quote is not.
 - Only basket and support drafts can execute. Producer/inventory/procurement/growth proposals must use existing management processes after review.
 - Mutations require JSON and a same-origin or explicitly configured frontend origin. Private responses use `Cache-Control: private, no-store` and the existing service worker excludes APIs.
 
 ## Limits and records
 
-`AgentRun`: owner, selected mode, status, timestamps, token counts, invoked tool names. No prompt/image/full transcript is persisted here.
+`AgentConversation`: owner, workspace, title and timestamps. Only the owner with current workspace permission can list, resume or delete it.
+
+`AgentRun`: owner, selected mode, status, timestamps, token counts, invoked tool names, conversation ID, request ID/fingerprint, budget and user/assistant text for new conversations. Images and full tool-call transcripts are not stored. Completed responses are replayed for an identical request ID, without consuming more inference or quota; mismatched ID reuse is rejected. One live turn is allowed per conversation. A run older than two minutes cannot finish or expose partial drafts.
 
 `AgentDraft`: owner, run, kind, title, structured payload, status, expiry and confirmation receipt. Payloads may include customer-written support information. Runs/drafts currently use application-scoped owner IDs; account deletion must include these records when that workflow is implemented.
 
 Per request: six model steps, at most 16 executed tools, 1,800 output tokens per generation step, one provider retry, 50-second abort deadline. Per account: 20 requests/hour, counted transactionally in PostgreSQL across app instances. Configure a global provider spend cap in AI Gateway as well; per-account limits do not protect against many separately registered accounts. Prompt injection instructions are defensive guidance, not proof of injection immunity; tool permissions and confirmation boundaries are the enforcement layer.
+
+Conversation deletion immediately erases its user/assistant text and proposals. Completed saved bags and support cases remain. Minimal run receipts (including request hashes and usage) remain so deletion cannot bypass quotas or cause old requests to rerun. Deletion waits for active inference to finish.
 
 Add a retention worker before broad launch: expire presentation state and purge failed/old runs and drafts according to the adopted privacy policy (suggested starting point: 30 days), keeping necessary audit receipts separately. Expiry currently prevents execution but does not delete rows. Host termination can leave `running` rows; they still consume quota and their drafts cannot execute. A future cleanup worker should mark stale runs failed.
 
@@ -64,14 +69,18 @@ Add a retention worker before broad launch: expire presentation state and purge 
 | Path | Purpose |
 | --- | --- |
 | `/assistant` | Responsive customer/staff workspace and draft review |
-| `GET /api/agentic` | Configured state, authorized modes and recent completed-run drafts |
-| `POST /api/agentic` | `{mode, message, budget?, image?}`; budget mandatory for shopping |
+| `GET /api/agentic` | Configured state, authorized modes, recent conversations and completed-run drafts |
+| `POST /api/agentic` | `{requestId, conversationId?, mode, message, budget?, image?}`; UUID request ID required, budget mandatory for shopping |
 | `POST /api/agentic/drafts/:id/confirm` | `{confirm: true}`; executes only an owned basket/support draft |
+| `GET /api/agentic/conversations/:id` | Owned conversation and its latest 40 turns / 30 proposals |
+| `DELETE /api/agentic/conversations/:id` | Delete owned conversation content; requires JSON content type and trusted origin |
+| `PATCH /api/agentic/drafts/:id` | `{action: "dismiss"}` or `{action: "revise", items}`; positive integer quantities, omitted lines removed |
+| `lib/agentic/conversations.ts` | Owned memory, bounded context, durable request receipts and thread serialization |
 | `lib/agentic/contracts.ts` | Validated inputs, role policies and shared types |
 | `lib/agentic/tools.ts` | Mode-specific, narrowly scoped business tools |
 | `lib/agentic/service.ts` | Quotes, persistence, quota and transactional confirmation |
 | `lib/agentic/http.ts` | Auth, origin checks, bounded body parsing and private responses |
-| `prisma/migrations/20261028180000_agentic_commerce` | Additive run/draft schema |
+| `prisma/migrations/20261028180000_agentic_commerce` and `20261028230000_agent_conversations` | Additive draft, conversation and retry-receipt schema |
 
 ## Development and staging
 
@@ -93,3 +102,7 @@ Acceptance: a customer requests a basket under Rs. 3,500, sees actual products a
 5. **Growth and external commerce:** add channel-specific consent, suppression, frequency caps and campaign approval before email/WhatsApp dispatch. Keep current public MCP read-only. Evaluate authenticated external agent commerce separately, including protocol conformance, merchant eligibility and operational support; protocol implementation is not a promise of listing in an AI marketplace.
 
 Keep payments, refunds, seller price changes and purchase orders behind deterministic application services and explicit approvals throughout. Extract services when measured load, team ownership or isolation requirements justify the operational cost.
+
+## Conversation and basket acceptance checks
+
+Start a shopping conversation, ask a follow-up such as “replace those bananas”, reload and resume it, then edit a quantity and recheck the total before confirming. Retry an unchanged request after a network error; its saved response must return without another model call. Try another customer’s conversation ID, a different workspace on the same conversation, two concurrent turns, reused request IDs with changed content, old/dismissed proposal confirmation and deletion during active inference. Delete a completed conversation and confirm its text/drafts are gone while saved bags/support cases and the hourly quota remain. Automated PostgreSQL CI covers these data and concurrency boundaries. Model relevance and browser interaction still require staging evaluation with a configured provider.

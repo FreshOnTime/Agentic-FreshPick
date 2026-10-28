@@ -30,8 +30,10 @@ it('rejects oversized requests before reading', async () => {
 
 it('uses an independent filename and a detected raster extension', async () => {
   const image = await readProductImage(upload(new Uint8Array([137,80,78,71,13,10,26,10]), 'image/png'));
-  expect(image.filename).toMatch(/^[a-f0-9-]+\.png$/);
-  expect(image.filename).not.toContain('bad');
+  // A random hexadecimal UUID can legitimately contain "bad". Check the
+  // generated UUID and detected extension instead of a random substring.
+  expect(image.filename).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.png$/);
+  expect(image.filename).not.toContain('/');
 });
 
 it('does not persist serverless images to ephemeral disk when Supabase Storage is missing', async () => {

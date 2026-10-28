@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import prisma from '@/lib/prisma';
 import { basketTotals, productUnitPrice } from '@/lib/commercePricing';
-import { AgentError, basketInput, type Actor, type BasketInput, type BasketQuote } from './contracts';
+import { AgentError, assertMode, basketInput, draftEditSchema, type Actor, type AgentMode, type BasketInput, type BasketQuote } from './contracts';
 
 type DB = Prisma.TransactionClient;
 export const publicProductSelect = {
@@ -51,6 +51,7 @@ export async function startRun(actor: Actor, mode: string) {
 
 export async function confirmDraft(actor: Actor, id: string) {
   return prisma.$transaction(async tx => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`agent:${actor.userId}`}))`;
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`draft:${id}`}))`;
     const draft = await tx.agentDraft.findFirst({ where: { id, userId: actor.userId }, include: { run: { select: { status: true } } } });
     if (!draft) throw new AgentError('Draft not found.', 404);
@@ -93,5 +94,32 @@ export async function confirmDraft(actor: Actor, id: string) {
     await tx.agentDraft.update({ where: { id }, data: { status: 'confirmed', resultId } });
     await tx.auditLog.create({ data: { userId: actor.userId, action: 'agent_draft_confirmed', resourceType: draft.kind, resourceId: resultId, after: { draftId: id } } });
     return { kind: draft.kind, resultId };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export async function editDraft(actor: Actor, id: string, input: unknown) {
+  const parsed = draftEditSchema.safeParse(input);
+  if (!parsed.success) throw new AgentError('Select valid whole pack quantities, or dismiss this proposal.');
+  return prisma.$transaction(async tx => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`agent:${actor.userId}`}))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`draft:${id}`}))`;
+    const draft = await tx.agentDraft.findFirst({ where: { id, userId: actor.userId }, include: { run: { select: { status: true, mode: true } } } });
+    if (!draft) throw new AgentError('Draft not found.', 404);
+    assertMode(actor, draft.run.mode as AgentMode);
+    if (draft.run.status !== 'completed') throw new AgentError('This assistant request has not completed successfully.', 409);
+    if (parsed.data.action === 'dismiss' && draft.status === 'dismissed') return { draft };
+    if (draft.status !== 'pending') throw new AgentError('This proposal has already been confirmed, replaced or dismissed.', 409);
+    if (parsed.data.action === 'dismiss') {
+      return { draft: await tx.agentDraft.update({ where: { id }, data: { status: 'dismissed' } }) };
+    }
+    if (draft.kind !== 'basket') throw new AgentError('Only grocery baskets can be revised here.');
+    const original = draft.payload as unknown as BasketQuote;
+    const ids = new Set(original.items.map(item => item.productId));
+    if (parsed.data.items.some(item => !ids.has(item.productId))) throw new AgentError('Ask the assistant to find a new product before adding it.');
+    const quote = await quoteBasket({ name: original.name, budget: original.budget, items: parsed.data.items }, tx);
+    const revision = await tx.agentDraft.create({ data: { userId: actor.userId, runId: draft.runId, kind: 'basket', title: draft.title,
+      payload: JSON.parse(JSON.stringify(quote)) as Prisma.InputJsonValue, expiresAt: new Date(Date.now() + 30 * 60_000) } });
+    await tx.agentDraft.update({ where: { id }, data: { status: 'superseded' } });
+    return { draft: revision, replacedId: id };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }

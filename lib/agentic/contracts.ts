@@ -11,6 +11,8 @@ export const modeInfo: Record<AgentMode, { title: string; description: string; e
   growth: { title: 'Bundles & retention', description: 'Draft bundles and campaigns for a consented audience.', example: 'Suggest a seasonal bundle from the live catalog and draft an email campaign for opted-in subscribers.' },
 };
 export const requestSchema = z.object({
+  requestId: z.string().uuid(),
+  conversationId: z.string().uuid().optional(),
   mode: z.enum(modes),
   message: z.string().trim().min(1).max(4000),
   budget: z.number().positive().max(1_000_000).optional(),
@@ -30,8 +32,15 @@ export type BasketQuote = BasketInput & {
 export type DraftView = { id: string; kind: string; title: string; payload: unknown; status: string; expiresAt: string; resultId: string | null };
 
 export class AgentError extends Error {
-  constructor(message: string, public status = 400) { super(message); }
+  constructor(message: string, public status = 400, public code?: string) { super(message); }
 }
+export type AgentRequest = z.infer<typeof requestSchema>;
+export type ConversationView = { id: string; title: string; mode: AgentMode; updatedAt: string };
+export type TurnView = { id: string; requestText: string | null; responseText: string | null; status: string; budget: number | null };
+export const draftEditSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('dismiss') }).strict(),
+  z.object({ action: z.literal('revise'), items: basketInput.shape.items }).strict(),
+]);
 export type Actor = { userId: string; roles: string[]; supplierId: string | null };
 export function allowedModes(actor: Actor): AgentMode[] {
   const result: AgentMode[] = ['shopping', 'procurement', 'support'];

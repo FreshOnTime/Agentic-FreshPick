@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyToken } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import { AgentError, type Actor } from './contracts';
+import { DeliveryPolicyError } from '@/lib/deliveryPolicy';
 
 export async function agentActor(request: NextRequest, mutation = false): Promise<Actor> {
   if (mutation) {
@@ -36,6 +37,7 @@ export function agentResponse(data: unknown, status = 200) {
   return NextResponse.json(data, { status, headers: { 'Cache-Control': 'private, no-store' } });
 }
 export function agentFailure(error: unknown) {
-  if (error instanceof AgentError) return agentResponse({ error: error.message }, error.status);
+  if (error instanceof DeliveryPolicyError) return agentResponse({ error: error.message }, error.status);
+  if (error instanceof AgentError) return agentResponse({ error: error.message, ...(error.code ? { code: error.code } : {}) }, error.status);
   return agentResponse({ error: 'The assistant could not complete this request. Please try again.' }, 503);
 }

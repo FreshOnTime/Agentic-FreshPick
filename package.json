@@ -25,7 +25,7 @@
     "test:unit": "jest --testPathIgnorePatterns=__tests__/smoke",
     "test:checkout-db": "node scripts/verify-checkout-integrity.cjs",
     "check:production": "node scripts/check-platform-readiness.cjs",
-    "test:agentic": "jest --runInBand --runTestsByPath __tests__/lib/agentic.test.ts __tests__/api/agentic.test.ts"
+    "test:agentic": "jest --runInBand --runTestsByPath __tests__/lib/agentic.test.ts __tests__/api/agentic.test.ts __tests__/lib/agenticConversations.test.ts"
   },
   "prisma": {
     "seed": "node -r esbuild-register prisma/seed.ts"
