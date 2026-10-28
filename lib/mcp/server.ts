@@ -6,9 +6,10 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import prisma from '@/lib/prisma';
 import { productCardSelect, serializeProductCardForUi } from '@/lib/productSerializer';
+import { packLabel } from '@/lib/agentic/service';
 
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
-const productSelect = { ...productCardSelect, category: { select: { name: true, slug: true } } } satisfies Prisma.ProductSelect;
+const productSelect = { ...productCardSelect, attributes: true, category: { select: { name: true, slug: true } } } satisfies Prisma.ProductSelect;
 type PublicProductRow = Prisma.ProductGetPayload<{ select: typeof productSelect }>;
 
 function productResult(row: PublicProductRow) {
@@ -25,6 +26,8 @@ function productResult(row: PublicProductRow) {
     price: discountedUnitPrice(basePrice, product.discountPercentage),
     discountPercentage: product.discountPercentage,
     inStock: !product.isOutOfStock,
+    pack: packLabel(row.attributes),
+    quantityUnit: 'catalog_pack',
     isBundle: product.isBundle,
     imageUrl: product.image.url,
     path: `/products/${encodeURIComponent(product.sku)}`,

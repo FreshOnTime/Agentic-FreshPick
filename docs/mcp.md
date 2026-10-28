@@ -28,7 +28,7 @@ Select Streamable HTTP and no authentication. Use the client's configuration for
 | `get_product` | `sku` | A public product's description, price and availability |
 | `list_categories` | None | Active category slugs and storefront paths |
 
-Example prompts: “Find tomatoes in stock on FreshPick”; “Show FreshPick's grocery categories”; “Find pantry products on FreshPick.” Prices and availability may change; confirm on the storefront before purchasing.
+Example prompts: “Find tomatoes in stock on FreshPick”; “Show FreshPick's grocery categories”; “Find pantry products on FreshPick.” Results include `pack` and `quantityUnit: "catalog_pack"`; quantities mean catalog packs, not inferred kilograms. Missing pack metadata is explicitly labeled unverified. Prices and availability may change; confirm on the storefront before purchasing.
 
 ## Transport and data boundaries
 

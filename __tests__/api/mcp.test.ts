@@ -69,6 +69,13 @@ describe('FreshPick MCP protocol and public data boundaries', () => {
     expect(called.body.result.isError).toBe(true);
   });
 
+  it('exposes catalog pack units without leaking other attributes to partner agents', async () => {
+    mockPrisma.product.findFirst.mockResolvedValue({ ...product, attributes: { baseMeasurementQuantity: 500, measurementUnit: 'g', supplierNotes: 'private supplier terms' } });
+    const called = await tool('get_product', { sku: 'tomato' });
+    expect(called.body.result.structuredContent.product).toMatchObject({ pack: '500 g', quantityUnit: 'catalog_pack' });
+    expect(JSON.stringify(called.body)).not.toContain('private supplier terms');
+  });
+
   it('lists active categories with a bounded query', async () => {
     await tool('list_categories');
     expect(mockPrisma.category.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { isActive: true }, take: 100 }));

@@ -77,6 +77,27 @@ describe('Smoke Tests - Critical API Endpoints', () => {
     }, timeout);
   });
 
+  describe('Partner protocol boundaries', () => {
+    it('never serves partner tasks to an anonymous client', async () => {
+      const response = await fetch(`${BASE_URL}/api/a2a`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'A2A-Version': '1.0' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 'smoke', method: 'ListTasks', params: {} }) });
+      // Disabled/unconfigured deployments return 503; enabled deployments require credentials.
+      expect([401, 503]).toContain(response.status);
+      expect(response.headers.get('cache-control')).toBe('private, no-store');
+      expect((await fetch(`${BASE_URL}/api/a2a`)).status).toBe(405);
+    }, timeout);
+
+    it('serves either a disabled discovery response or a valid public Agent Card', async () => {
+      const response = await fetch(`${BASE_URL}/.well-known/agent-card.json`);
+      expect([200, 503]).toContain(response.status);
+      const body = await response.json();
+      if (response.status === 200) {
+        expect(body.supportedInterfaces[0].protocolVersion).toBe('1.0');
+        expect(body.skills[0].id).toBe('prepare_quote');
+      } else expect(body.error).toBeTruthy();
+    }, timeout);
+  });
+
   describe('Categories API', () => {
     it('should retrieve categories list', async () => {
       const response = await fetch(`${BASE_URL}/api/categories`);
