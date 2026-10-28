@@ -62,7 +62,15 @@ export async function confirmDraft(actor: Actor, id: string) {
     if (draft.kind === 'basket') {
       const original = draft.payload as unknown as BasketQuote;
       const current = await quoteBasket(basketInput.parse({ name: original.name, budget: original.budget, items: original.items }), tx);
-      if (JSON.stringify(current.lines) !== JSON.stringify(original.lines) || current.shipping !== original.shipping) {
+      // PostgreSQL JSONB normalizes object-key order. Compare quote values,
+      // never serialization order, when deciding whether customer review is stale.
+      const unchanged = current.lines.length === original.lines.length && current.lines.every((line, index) => {
+        const previous = original.lines[index];
+        return line.productId === previous.productId && line.quantity === previous.quantity &&
+          line.price === previous.price && line.total === previous.total &&
+          line.name === previous.name && line.pack === previous.pack;
+      });
+      if (!unchanged || current.shipping !== original.shipping || current.total !== original.total) {
         throw new AgentError('Prices, pack details or delivery fees changed. Prepare a new basket to review the latest quote.', 409);
       }
       const bag = await tx.bag.create({ data: {

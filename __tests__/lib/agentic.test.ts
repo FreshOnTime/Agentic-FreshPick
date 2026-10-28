@@ -116,6 +116,13 @@ it('rejects another owner, expired drafts and failed runs', async () => {
   await expect(confirmDraft(customer, 'draft-1')).rejects.toThrow('not completed');
   expect(mock.bag.create).not.toHaveBeenCalled();
 });
+it('accepts unchanged quotes after PostgreSQL JSONB reorders object keys', async () => {
+  const draft = await pendingDraft();
+  const normalize = (value: unknown): unknown => Array.isArray(value) ? value.map(normalize)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, normalize(item)])) : value;
+  mock.agentDraft.findFirst.mockResolvedValue({ ...draft, payload: normalize(draft.payload) });
+  await expect(confirmDraft(customer, draft.id)).resolves.toEqual({ kind: 'basket', resultId: 'bag-1' });
+});
 it('rejects changed prices or stock at confirmation without creating a bag', async () => {
   mock.agentDraft.findFirst.mockResolvedValue(await pendingDraft());
   mock.product.findMany.mockResolvedValue([{ ...product, price: 250 }]);

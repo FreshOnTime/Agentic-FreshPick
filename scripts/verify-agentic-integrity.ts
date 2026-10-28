@@ -22,7 +22,7 @@ async function main() {
     // Competing transactions may serialize or one may fail with P2034. Both must
     // converge on a single receipt when the caller retries.
     const attempts = await Promise.allSettled([confirmDraft(actor, draft.id), confirmDraft(actor, draft.id)]);
-    assert(attempts.some(result => result.status === 'fulfilled'));
+    assert(attempts.some(result => result.status === 'fulfilled'), JSON.stringify(attempts.map(result => result.status === 'rejected' ? String(result.reason) : result.value)));
     const receipt = await confirmDraft(actor, draft.id);
     assert.equal(await prisma.bag.count({ where: { userId: user.id } }), 1);
     assert.equal((await prisma.bag.findUniqueOrThrow({ where: { id: receipt.resultId! } })).totalAmount.toNumber(), 360);
