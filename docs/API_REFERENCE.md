@@ -1,5 +1,20 @@
 # API reference
 
+## Agentic fork additions — 29 October 2026
+
+The historical inventory below predates these additions:
+
+| Route | Methods | Access and behavior |
+| --- | --- | --- |
+| `/api/agentic` | GET, POST | Authenticated assistant metadata and generation |
+| `/api/agentic/conversations/[id]` | GET, DELETE | Owner-only thread retrieval/deletion |
+| `/api/agentic/drafts/[id]` | PATCH | Owner-only quantity revision or dismissal |
+| `/api/agentic/drafts/[id]/confirm` | POST | Owner confirmation; supported bag/support actions only |
+| `/api/a2a` | POST; GET returns 405 | Partner bearer credentials; A2A 1.0 quotations |
+| `/.well-known/agent-card.json` | GET | Public discovery when A2A is enabled |
+
+See [agentic architecture](AGENTIC_ARCHITECTURE.md), [A2A contract](A2A.md) and [updated MCP transport](mcp.md).
+
 This reference covers the App Router handlers at the revision in the [documentation index](README.md). The inventory below includes **113 route files and 190 exported HTTP handlers**, including compatibility aliases, disabled endpoints and MCP methods that intentionally return 405. Presence in the inventory is not an endorsement to use every legacy route.
 
 ## Conventions

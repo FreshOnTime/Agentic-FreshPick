@@ -1,5 +1,13 @@
 # Agentic FreshPick documentation
 
+New guides, reviewed on **29 October 2026**:
+
+- [A2A partner quotations](A2A.md): authentication, tasks, retries and examples.
+- [Deploy on Vercel](VERCEL_DEPLOYMENT.md): app, assistant, MCP, A2A and scheduler boundaries.
+- [Documentation publishing](GITHUB_PAGES.md): GitHub Pages setup.
+
+Inherited commerce guides retain their original review scope. New fork endpoints are listed separately in the API reference.
+
 Start with [Agentic architecture, implemented features and rollout](AGENTIC_ARCHITECTURE.md). The inherited guides below document the underlying commerce application.
 
 # FreshPick documentation

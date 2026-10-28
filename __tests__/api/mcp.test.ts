@@ -3,8 +3,10 @@ import type { NextRequest } from 'next/server';
 const mockPrisma = { product: { findMany: jest.fn(), findFirst: jest.fn() }, category: { findMany: jest.fn() } };
 jest.mock('server-only', () => ({}), { virtual: true });
 jest.mock('@/lib/prisma', () => ({ __esModule: true, default: mockPrisma }));
+jest.mock('@/lib/sharedRateLimit', () => ({ ...jest.requireActual('@/lib/sharedRateLimit'), consumeSharedRateLimit: jest.fn() }));
 
 import { POST, GET, DELETE, OPTIONS } from '@/app/api/mcp/route';
+import { consumeSharedRateLimit, SharedRateLimitError } from '@/lib/sharedRateLimit';
 
 const product = { id: 'p1', sku: 'tomato', name: 'Tomatoes', description: 'Fresh tomatoes', price: 350, discountPercentage: 15, stockQty: 2, image: '/tomato.jpg', images: [], isBundle: false, category: { name: 'Produce', slug: 'produce' }, costPrice: 120, supplierId: 'private-supplier' };
 let nextId = 1;
@@ -21,6 +23,7 @@ async function tool(name: string, args: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.mocked(consumeSharedRateLimit).mockReset().mockResolvedValue(undefined);
   mockPrisma.product.findMany.mockResolvedValue([product]);
   mockPrisma.product.findFirst.mockResolvedValue(product);
   mockPrisma.category.findMany.mockResolvedValue([]);
@@ -111,9 +114,27 @@ describe('FreshPick MCP protocol and public data boundaries', () => {
   });
 
   it('limits repeated protocol requests and supplies a retry time', async () => {
-    let response: Response | undefined;
-    for (let i = 0; i < 61; i++) response = await POST(request({ jsonrpc: '2.0', id: nextId++, method: 'ping' }, { 'x-nf-client-connection-ip': 'mcp-rate-test-client' }));
-    expect(response?.status).toBe(429);
-    expect(Number(response?.headers.get('Retry-After'))).toBeGreaterThan(0);
+    jest.mocked(consumeSharedRateLimit).mockRejectedValueOnce(new SharedRateLimitError(42));
+    const response = await POST(request({ jsonrpc: '2.0', id: nextId++, method: 'ping' }));
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('42');
+  });
+
+  it('fails closed when shared rate storage is unavailable without exposing internals', async () => {
+    jest.mocked(consumeSharedRateLimit).mockRejectedValueOnce(new Error('database password'));
+    const { response, body } = await rpc('tools/list');
+    expect(response.status).toBe(503);
+    expect(JSON.stringify(body)).not.toContain('password');
+  });
+
+  it('accepts the current Vercel deployment hostname but not arbitrary preview hosts', async () => {
+    const previous = { VERCEL: process.env.VERCEL, VERCEL_URL: process.env.VERCEL_URL };
+    process.env.VERCEL = '1'; process.env.VERCEL_URL = 'freshpick-preview.vercel.app';
+    try {
+      expect((await OPTIONS(new Request('https://freshpick-preview.vercel.app/api/mcp'))).status).toBe(204);
+      expect((await OPTIONS(new Request('https://attacker.vercel.app/api/mcp'))).status).toBe(403);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    }
   });
 });

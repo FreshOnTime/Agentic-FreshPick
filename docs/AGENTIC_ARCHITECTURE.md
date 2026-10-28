@@ -1,5 +1,7 @@
 # Agentic FreshPick: implementation and next architecture
 
+**29 October 2026 update:** [A2A quotations](A2A.md) add a deterministic A2A 1.0 skill, separate partner credentials, persisted tasks, follow-ups and durable retry receipts. MCP now uses a shared PostgreSQL quota and recognizes Vercel hostnames. See [Vercel deployment](VERCEL_DEPLOYMENT.md) and [Pages publishing](GITHUB_PAGES.md). Netlify schedules still require explicit Vercel adapters.
+
 This repository starts from **FreshOnTime/newfreshontimewebsite**, pinned to commit `51a4bb811f78cfac5319fdd82c2d5de09e215559`. The storefront, assets, portals, orders, COD checkout, subscriptions, administration, migrations and public read-only MCP endpoint are retained. This is a code/assets copy, not a copy of the production database, uploaded Supabase objects, hosting settings or secrets. The original repository is not modified.
 
 ## Decision: extend the commerce application
