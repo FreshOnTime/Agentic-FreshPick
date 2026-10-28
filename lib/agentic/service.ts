@@ -85,7 +85,7 @@ export async function confirmDraft(actor: Actor, id: string) {
       if (!order) throw new AgentError('Order not found.', 404);
       if (!user.email) throw new AgentError('Add an email to your profile before submitting a support case.');
       const enquiry = await tx.contactEnquiry.create({ data: { submissionId: draft.id, name: user.firstName.slice(0,100), email: user.email,
-        subject: payload.subject, message: payload.message, orderId: order.id, source: 'agentic-support' } });
+        subject: payload.subject, message: payload.message, orderId: order.id, source: 'support' } });
       resultId = enquiry.id;
     } else {
       throw new AgentError('This is a review-only proposal. Apply approved changes through the existing management workflow.');

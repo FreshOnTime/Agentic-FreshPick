@@ -2,6 +2,7 @@ import prisma from '@/lib/prisma';
 import { allowedModes, assertMode, basketInput, type Actor } from '@/lib/agentic/contracts';
 import { confirmDraft, quoteBasket, startRun } from '@/lib/agentic/service';
 import { createAgentTools } from '@/lib/agentic/tools';
+import { enquirySources } from '@/lib/contactEnquiries';
 
 jest.mock('ai', () => ({ tool: (value: unknown) => value }));
 jest.mock('@/lib/prisma', () => ({ __esModule: true, default: {
@@ -134,6 +135,14 @@ it('rejects changed prices or stock at confirmation without creating a bag', asy
 it('does not execute review-only operational proposals', async () => {
   mock.agentDraft.findFirst.mockResolvedValue({ ...await pendingDraft(), kind: 'growth' });
   await expect(confirmDraft(customer, 'draft-1')).rejects.toThrow('review-only');
+});
+it('submits support drafts using a source supported by the existing inbox', async () => {
+  mock.agentDraft.findFirst.mockResolvedValue({ ...await pendingDraft(), kind: 'support', payload: { orderId: 'order-1', subject: 'Order help', message: 'Please check delivery.' } });
+  mock.order.findFirst.mockResolvedValue({ id: 'order-1' });
+  mock.user.findUniqueOrThrow.mockResolvedValue({ firstName: 'Customer', email: 'customer@example.test' });
+  mock.contactEnquiry.create.mockResolvedValue({ id: 'case-1' });
+  expect(await confirmDraft(customer, 'draft-1')).toEqual({ kind: 'support', resultId: 'case-1' });
+  expect(enquirySources).toContain(mock.contactEnquiry.create.mock.calls[0][0].data.source);
 });
 it('enforces a database-backed hourly quota before a model call', async () => {
   mock.agentRun.count.mockResolvedValue(20);
