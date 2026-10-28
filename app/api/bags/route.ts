@@ -1,0 +1,85 @@
+import { NextRequest, NextResponse } from 'next/server';
+import prisma from '@/lib/prisma';
+import { productUnitPrice } from '@/lib/commercePricing';
+import { requireAuth } from '@/lib/auth';
+import { BAG_INCLUDE, serializeBag, bagTotal } from '@/lib/bagSerializer';
+
+// GET - Fetch the authenticated user's active bags
+export const GET = requireAuth(async (request: NextRequest & { user?: { userId: string; role: string; mongoId?: string } }) => {
+  try {
+    const userId = request.user?.mongoId || request.user?.userId;
+    if (!userId) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+
+    const bags = await prisma.bag.findMany({
+      where: { userId, isActive: true },
+      include: BAG_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return NextResponse.json({ success: true, data: bags.map(serializeBag) });
+  } catch (error) {
+    console.error('Error fetching bags:', error);
+    return NextResponse.json({ error: 'Failed to fetch bags' }, { status: 500 });
+  }
+});
+
+// POST - Create a new bag for the authenticated user
+export const POST = requireAuth(async (request: NextRequest & { user?: { userId: string; role: string; mongoId?: string } }) => {
+  try {
+    const userId = request.user?.mongoId || request.user?.userId;
+    const body = await request.json().catch(() => null);
+    const { name, description, items, tags } = body || {};
+
+    if (!userId || typeof name !== 'string' || !name.trim() || name.length > 120 ||
+        !Array.isArray(items) || items.length > 100 ||
+        (description !== undefined && (typeof description !== 'string' || description.length > 1000)) ||
+        (tags !== undefined && (!Array.isArray(tags) || tags.length > 20 ||
+          tags.some((tag: unknown) => typeof tag !== 'string' || tag.length > 60)))) {
+      return NextResponse.json({ error: 'Invalid bag details or items' }, { status: 400 });
+    }
+
+    // Merge duplicate IDs/aliases into one canonical product entry so the
+    // unique (bagId, productId) constraint cannot produce an opaque 500.
+    const merged = new Map<string, { productId: string; quantity: number; price: number; stock: number; name: string }>();
+    for (const item of items) {
+      if (typeof item?.productId !== 'string' || !item.productId.trim() || item.productId.length > 200) {
+        return NextResponse.json({ error: 'Invalid product ID' }, { status: 400 });
+      }
+      const qty = Number(item.quantity);
+      if (!Number.isSafeInteger(qty) || qty > 10000 || qty <= 0) {
+        return NextResponse.json({ error: 'Invalid item quantity' }, { status: 400 });
+      }
+      const product = await prisma.product.findFirst({
+        where: { archived: false, OR: [{ id: item.productId }, { sku: item.productId }, { slug: item.productId }] },
+      });
+      if (!product) {
+        return NextResponse.json({ error: `Product with ID ${item.productId} not found` }, { status: 400 });
+      }
+      const existing = merged.get(product.id);
+      const combined = (existing?.quantity || 0) + qty;
+      if (combined > 10000 || product.stockQty < combined) {
+        return NextResponse.json({ error: `Insufficient stock for product ${product.name}` }, { status: 400 });
+      }
+      merged.set(product.id, { productId: product.id, quantity: combined,
+        price: productUnitPrice(product), stock: product.stockQty, name: product.name });
+    }
+
+    const validatedItems = Array.from(merged.values()).map(({ productId, quantity, price }) => ({ productId, quantity, price }));
+    const bag = await prisma.bag.create({
+      data: {
+        userId,
+        name: name.trim(),
+        description: description?.trim() || null,
+        tags: Array.isArray(tags) ? tags : [],
+        totalAmount: bagTotal(validatedItems),
+        items: { create: validatedItems },
+      },
+      include: BAG_INCLUDE,
+    });
+
+    return NextResponse.json({ success: true, data: serializeBag(bag) }, { status: 201 });
+  } catch (error) {
+    console.error('Error creating bag:', error);
+    return NextResponse.json({ error: 'Failed to create bag' }, { status: 500 });
+  }
+});

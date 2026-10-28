@@ -1,0 +1,91 @@
+"use client";
+
+import PremiumPageHeader from "@/components/ui/PremiumPageHeader";
+import { Clock, CheckCircle2 } from "lucide-react";
+
+export default function RefundPage() {
+    return (
+        <div className="bg-background min-h-screen">
+            <PremiumPageHeader
+                title="Refund & Replacement Policy"
+                subtitle="We stand behind the freshness of our products."
+                backgroundImage="/images/home/tomatoes.webp"
+            />
+
+            <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+                {/* Intro Alert */}
+                <div className="bg-secondary border border-border rounded-lg p-6 mb-6 flex gap-4">
+                    <CheckCircle2 className="w-6 h-6 text-brand-green flex-shrink-0 mt-1" />
+                    <div>
+                        <h3 className="font-bold text-brand-green mb-1">Our Freshness Guarantee</h3>
+                        <p className="text-brand-green text-sm">
+                            If any perishable item you receive is not up to standard, we will replace it or refund it—no questions asked, provided you report it within 24 hours.
+                        </p>
+                    </div>
+                </div>
+
+                <div className="prose prose-emerald max-w-none">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div>
+                            <h2 className="text-xl font-normal text-foreground mb-4 flex items-center gap-2">
+                                <Clock className="w-5 h-5 text-muted-foreground" />
+                                Perishable Items
+                            </h2>
+                            <p className="text-muted-foreground text-sm mb-4">
+                                (Vegetables, Fruits, Meat, Seafood, Dairy)
+                            </p>
+                            <ul className="list-disc pl-5 space-y-2 text-muted-foreground">
+                                <li>Must be reported within <strong>24 hours</strong> of delivery.</li>
+                                <li>Please provide a photo of the item if possible.</li>
+                                <li>We will offer a replacement in your next order or a store credit refund.</li>
+                            </ul>
+                        </div>
+
+                        <div>
+                            <h2 className="text-xl font-normal text-foreground mb-4 flex items-center gap-2">
+                                <Clock className="w-5 h-5 text-muted-foreground" />
+                                Non-Perishable Items
+                            </h2>
+                            <p className="text-muted-foreground text-sm mb-4">
+                                (Packaged Foods, Household Items)
+                            </p>
+                            <ul className="list-disc pl-5 space-y-2 text-muted-foreground">
+                                <li>Returnable within <strong>7 days</strong> of delivery.</li>
+                                <li>Item must be unopened and in original packaging.</li>
+                                <li>Refunds will be processed to your original payment method or as store credit.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div className="space-y-12 border-t border-border pt-6">
+                        <section>
+                            <h2 className="text-2xl font-normal text-foreground mb-4">How to Request a Refund</h2>
+                            <ol className="list-decimal pl-6 space-y-3 text-muted-foreground">
+                                <li>Take a photo of the item (for quality issues).</li>
+                                <li>Contact us via WhatsApp or Email at <a href="mailto:hello@freshpick.lk" className="text-primary hover:underline">hello@freshpick.lk</a>.</li>
+                                <li>Include your <strong>Order Number</strong> and details of the issue.</li>
+                                <li>Our team will respond within 24 hours to resolve it.</li>
+                            </ol>
+                        </section>
+
+                        <section>
+                            <h2 className="text-2xl font-normal text-foreground mb-4">Unavailable Items</h2>
+                            <p className="text-muted-foreground">
+                                If an item you ordered is out of stock at the time of packing, we will automatically refund that amount to your account or deduct it from your Cash on Delivery total.
+                            </p>
+                        </section>
+
+                        <section>
+                            <h2 className="text-2xl font-normal text-foreground mb-4">Late or Missing Refunds</h2>
+                            <p className="text-muted-foreground">
+                                If you haven’t received a refund yet, first check your bank account again. Then contact your credit card company, as it may take some time before your refund is officially posted.
+                                If you’ve done all of this and you still have not received your refund yet, please contact us.
+                            </p>
+                        </section>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}

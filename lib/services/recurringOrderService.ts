@@ -1,0 +1,271 @@
+import { assertDeliveryArea } from '@/lib/deliveryPolicy';
+import { basketTotals, productUnitPrice, roundMoney } from "@/lib/commercePricing";
+import { Prisma } from '@prisma/client';
+import prisma from '@/lib/prisma';
+import { sendOrderEmail } from '@/lib/services/mailService';
+
+export interface RecurringOrderPattern {
+  orderId: string;
+  customerId: string;
+  items: Array<{
+    productId: string;
+    sku: string;
+    name: string;
+    qty: number;
+    price: number;
+    total: number;
+  }>;
+  recurrence: {
+    startDate?: Date;
+    endDate?: Date;
+    daysOfWeek?: number[];
+    includeDates?: Date[];
+    excludeDates?: Date[];
+    selectedDates?: Date[];
+    rruleString?: string;
+    notes?: string;
+  };
+  shippingAddress: Record<string, unknown>;
+  billingAddress?: Record<string, unknown>;
+  subtotal: number;
+  tax: number;
+  shipping: number;
+  discount?: number;
+  total: number;
+  paymentMethod: string;
+  notes?: string;
+}
+
+export function hydrateRecurrence(rec: Prisma.JsonValue): RecurringOrderPattern['recurrence'] {
+  if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return {};
+  const r = rec as Record<string, unknown>;
+  return {
+    startDate: r.startDate ? new Date(String(r.startDate)) : undefined,
+    endDate: r.endDate ? new Date(String(r.endDate)) : undefined,
+    daysOfWeek: Array.isArray(r.daysOfWeek) ? r.daysOfWeek.filter((d): d is number => typeof d === 'number') : undefined,
+    includeDates: Array.isArray(r.includeDates) ? r.includeDates.map((d) => new Date(String(d))) : undefined,
+    excludeDates: Array.isArray(r.excludeDates) ? r.excludeDates.map((d) => new Date(String(d))) : undefined,
+    selectedDates: Array.isArray(r.selectedDates) ? r.selectedDates.map((d) => new Date(String(d))) : undefined,
+    rruleString: typeof r.rruleString === 'string' ? r.rruleString : undefined,
+    notes: typeof r.notes === 'string' ? r.notes : undefined,
+  };
+}
+
+function recurrenceToJson(rec: RecurringOrderPattern['recurrence']): Prisma.InputJsonValue {
+  return {
+    ...(rec.startDate ? { startDate: rec.startDate.toISOString() } : {}),
+    ...(rec.endDate ? { endDate: rec.endDate.toISOString() } : {}),
+    ...(rec.daysOfWeek ? { daysOfWeek: rec.daysOfWeek } : {}),
+    ...(rec.includeDates ? { includeDates: rec.includeDates.map((d) => d.toISOString()) } : {}),
+    ...(rec.excludeDates ? { excludeDates: rec.excludeDates.map((d) => d.toISOString()) } : {}),
+    ...(rec.selectedDates ? { selectedDates: rec.selectedDates.map((d) => d.toISOString()) } : {}),
+    ...(rec.notes ? { notes: rec.notes } : {}),
+  };
+}
+
+export class RecurringOrderService {
+  static calculateNextDelivery(pattern: RecurringOrderPattern, currentDate: Date = new Date()): Date | null {
+    const { recurrence } = pattern;
+    // A date picked in the UI is stored at midnight; treat it as inclusive for
+    // the entire calendar day so a scheduled delivery later that day is valid.
+    const endDate = recurrence.endDate
+      ? new Date(new Date(recurrence.endDate).setHours(23, 59, 59, 999))
+      : undefined;
+    if (endDate && currentDate > endDate) return null;
+
+    if (recurrence.rruleString) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { rrulestr } = require('rrule');
+        // RRule's UNTIL is timestamp-sensitive. Normalise it to the end of the
+        // selected end date so a date-only end date does not drop its final run.
+        const ruleString = endDate
+          ? recurrence.rruleString.replace(
+              /UNTIL=\d{8}(?:T\d{6}Z?)?/,
+              `UNTIL=${endDate.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`
+            )
+          : recurrence.rruleString;
+        const searchAfter = recurrence.startDate && recurrence.startDate > currentDate
+          ? new Date(recurrence.startDate.getTime() - 1)
+          : currentDate;
+        const next = rrulestr(ruleString).after(searchAfter);
+        if (next && (!endDate || next <= endDate)) return next;
+      } catch (e) {
+        console.error('Error parsing RRULE:', e);
+      }
+    }
+
+    const excluded = new Set((recurrence.excludeDates || []).map((d) => d.toDateString()));
+    const searchStart = recurrence.startDate && recurrence.startDate > currentDate ? recurrence.startDate : currentDate;
+    const explicit = [...(recurrence.selectedDates || []), ...(recurrence.includeDates || [])]
+      .filter((d) => d > currentDate && d >= searchStart && !excluded.has(d.toDateString()) && (!endDate || d <= endDate))
+      .sort((a, b) => +a - +b);
+    if (explicit.length) return explicit[0];
+
+    const days = recurrence.daysOfWeek || [];
+    if (!days.length) return null;
+    for (let i = searchStart > currentDate ? 0 : 1; i <= 366; i++) {
+      const nextDate = new Date(searchStart);
+      nextDate.setDate(searchStart.getDate() + i);
+      if (endDate && nextDate > endDate) return null;
+      if (days.includes(nextDate.getDay()) && !excluded.has(nextDate.toDateString())) return nextDate;
+    }
+    return null;
+  }
+
+  static async createNextOrderInstance(orderId: string) {
+    const now = new Date();
+    const schedule = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, isRecurring: true, scheduleStatus: true, nextDeliveryAt: true },
+    });
+    if (!schedule || !schedule.isRecurring) throw new Error('Order is not a recurring order');
+    if (schedule.scheduleStatus !== 'active' || !schedule.nextDeliveryAt || schedule.nextDeliveryAt > now) return null;
+
+    // `nextDeliveryAt` is the delivery that is due now. Claim that exact date
+    // in the transaction before creating its order, so concurrent cron runs
+    // cannot create duplicate instances.
+    const dueDelivery = schedule.nextDeliveryAt;
+    const created = await prisma.$transaction(async (tx) => {
+      const recurringOrder = await tx.order.findUnique({ where: { id: orderId }, include: { items: true, customer: true } });
+      if (!recurringOrder || !recurringOrder.isRecurring || recurringOrder.scheduleStatus !== 'active') return null;
+      if (!recurringOrder.nextDeliveryAt || recurringOrder.nextDeliveryAt.getTime() !== dueDelivery.getTime()) return null;
+
+      const pattern = {
+        ...recurringOrder,
+        recurrence: hydrateRecurrence(recurringOrder.recurrence),
+        subtotal: Number(recurringOrder.subtotal),
+        tax: Number(recurringOrder.tax),
+        shipping: Number(recurringOrder.shipping),
+        discount: Number(recurringOrder.discount),
+        total: Number(recurringOrder.total),
+      } as unknown as RecurringOrderPattern;
+      const followingDelivery = this.calculateNextDelivery(pattern, dueDelivery);
+
+      const claimed = await tx.order.updateMany({
+        where: { id: orderId, isRecurring: true, scheduleStatus: 'active', nextDeliveryAt: dueDelivery },
+        data: { nextDeliveryAt: followingDelivery, scheduleStatus: followingDelivery ? 'active' : 'ended' },
+      });
+      if (claimed.count !== 1) return null;
+
+      const productIds = recurringOrder.items.map((i) => i.productId);
+      const products = await tx.product.findMany({
+        where: { id: { in: productIds }, archived: false },
+        select: { id: true, sku: true, name: true, price: true, discountPercentage: true, stockQty: true },
+      });
+      const productMap = new Map(products.map((product) => [product.id, product]));
+      const items = recurringOrder.items.map((item) => {
+        const product = productMap.get(item.productId);
+        if (!product || product.stockQty < item.qty) throw new Error(`INSUFFICIENT_STOCK:${item.productId}`);
+        const price = productUnitPrice(product);
+        return { productId: product.id, sku: product.sku, name: product.name, qty: item.qty,
+          price, total: roundMoney(price * item.qty) };
+      });
+      for (const item of items) {
+        const product = productMap.get(item.productId)!;
+        const reserved = await tx.product.updateMany({
+          where: { id: item.productId, archived: false, price: product.price,
+            discountPercentage: product.discountPercentage, stockQty: { gte: item.qty } },
+          data: { stockQty: { decrement: item.qty } },
+        });
+        // Failure rolls back every reservation and the due-date claim. Never
+        // create a cancellable order for stock that was not reserved.
+        if (reserved.count !== 1) throw new Error(`INSUFFICIENT_STOCK:${item.productId}`);
+      }
+      assertDeliveryArea(recurringOrder.shippingAddress as { city: string; country: string });
+      const totals = basketTotals(items.map((item) => ({ price: item.price, quantity: item.qty })));
+
+      const order = await tx.order.create({
+        data: {
+          orderNumber: `AUTO-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+          customerId: recurringOrder.customerId,
+          bagId: recurringOrder.bagId,
+          bagName: recurringOrder.bagName,
+          ...totals,
+          status: 'confirmed',
+          paymentMethod: recurringOrder.paymentMethod,
+          paymentStatus: 'pending',
+          shippingAddress: recurringOrder.shippingAddress as Prisma.InputJsonValue,
+          billingAddress: recurringOrder.billingAddress as Prisma.InputJsonValue,
+          notes: 'Auto-generated from recurring order',
+          estimatedDelivery: dueDelivery,
+          isRecurring: false,
+          recurringSourceOrderId: recurringOrder.id,
+          items: { create: items },
+        },
+      });
+      if (recurringOrder.customer?.email) await sendOrderEmail(recurringOrder.customer.email, { _id: order.id, total: Number(order.total) }, tx);
+      return order;
+    });
+
+    return created;
+  }
+
+  static async processRecurringOrders(deadline = Date.now()+20_000) {
+    const results = { processed: 0, created: 0, errors: [] as string[] };
+    const dueOrders = await prisma.order.findMany({
+      where: { isRecurring: true, scheduleStatus: 'active', nextDeliveryAt: { lte: new Date() } },
+      select: { id: true },
+      take: 50,
+    });
+
+    for (const order of dueOrders) {
+      if (Date.now() >= deadline) break;
+      results.processed++;
+      try {
+        const created = await this.createNextOrderInstance(order.id);
+        if (created) results.created++;
+      } catch (error) {
+        results.errors.push(`Order ${order.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+    return results;
+  }
+
+  static validateRecurrencePattern(recurrence: RecurringOrderPattern['recurrence']) {
+    const errors: string[] = [];
+    if (
+      !recurrence.rruleString &&
+      !recurrence.daysOfWeek?.length &&
+      !recurrence.includeDates?.length &&
+      !recurrence.selectedDates?.length
+    ) {
+      errors.push('Must specify at least one recurrence pattern (daysOfWeek, includeDates, or selectedDates)');
+    }
+    if (recurrence.startDate && recurrence.endDate && recurrence.startDate >= recurrence.endDate) {
+      errors.push('Start date must be before end date');
+    }
+    if (recurrence.daysOfWeek?.some((day) => day < 0 || day > 6)) {
+      errors.push('Days of week must be between 0 (Sunday) and 6 (Saturday)');
+    }
+    return { valid: errors.length === 0, errors };
+  }
+
+  static async getRecurringOrderStats() {
+    const [orders, nextDeliveries] = await Promise.all([
+      prisma.order.findMany({ where: { isRecurring: true }, select: { scheduleStatus: true, total: true } }),
+      prisma.order.findMany({
+        where: { isRecurring: true, scheduleStatus: 'active', nextDeliveryAt: { gte: new Date() } },
+        select: { id: true, orderNumber: true, customerId: true, nextDeliveryAt: true, total: true },
+        orderBy: { nextDeliveryAt: 'asc' },
+        take: 10,
+      }),
+    ]);
+    const totalValue = orders.reduce((sum, order) => sum + Number(order.total), 0);
+    return {
+      total: orders.length,
+      active: orders.filter((o) => o.scheduleStatus === 'active').length,
+      paused: orders.filter((o) => o.scheduleStatus === 'paused').length,
+      ended: orders.filter((o) => o.scheduleStatus === 'ended').length,
+      totalValue,
+      avgOrderValue: orders.length ? totalValue / orders.length : 0,
+      nextDeliveries: nextDeliveries.map((order) => ({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        customerId: order.customerId,
+        nextDeliveryAt: order.nextDeliveryAt,
+        total: Number(order.total),
+      })),
+    };
+  }
+}

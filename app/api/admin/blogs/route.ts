@@ -1,0 +1,196 @@
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { Prisma } from '@prisma/client';
+import prisma from '@/lib/prisma';
+import { revalidateJournal, journalCategoryWhere, COMMERCE_BLOG_CATEGORIES } from '@/lib/journalService';
+import { requireAdminSimple, logAuditAction } from '@/lib/middleware/adminAuth';
+
+const blogImageUrlSchema = z.string().min(1).refine(value => {
+  if (value.startsWith('/') && !value.startsWith('//') && !value.includes('\\')) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}, 'Image must be a secure URL or local blog image path');
+
+const imageSchema = z.object({
+  url: blogImageUrlSchema,
+  alt: z.string().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+});
+
+const createBlogSchema = z.object({
+  title: z.string().min(5).max(200),
+  slug: z.string().min(1).max(250).optional(),
+  excerpt: z.string().min(10).max(500),
+  content: z.string().min(50),
+  featuredImage: imageSchema.optional(),
+  category: z.string().max(100).optional().refine(value => !value || !COMMERCE_BLOG_CATEGORIES.includes(value), 'This category is reserved for structured commerce content'),
+  tags: z.array(z.string()).max(20).default([]),
+  published: z.boolean().default(false),
+  publishedAt: z.string().datetime().optional(),
+  metaTitle: z.string().max(100).optional(),
+  metaDescription: z.string().max(300).optional(),
+  metaKeywords: z.array(z.string()).optional(),
+});
+
+const querySchema = z.object({
+  page: z.string().optional().transform((v) => (v ? parseInt(v) : 1)),
+  limit: z.string().optional().transform((v) => (v ? Math.min(parseInt(v), 100) : 20)),
+  search: z.string().optional(),
+  published: z.string().optional(),
+  category: z.string().optional(),
+});
+
+const AUTHOR_SELECT = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  email: true,
+} as const;
+
+type BlogWithAuthor = Prisma.BlogGetPayload<{ include: { author: { select: typeof AUTHOR_SELECT } } }>;
+
+function serializeBlog(blog: BlogWithAuthor) {
+  const { author, ...rest } = blog;
+  return {
+    ...rest,
+    _id: blog.id,
+    author: author ? { ...author, _id: author.id } : null,
+  };
+}
+
+export const GET = requireAdminSimple(async (request) => {
+  try {
+    const { searchParams } = new URL(request.url);
+    const query = querySchema.parse(Object.fromEntries(searchParams));
+
+    const where: Prisma.BlogWhereInput = { ...journalCategoryWhere, isDeleted: false };
+
+    if (query.search) {
+      where.OR = [
+        { title: { contains: query.search, mode: 'insensitive' } },
+        { excerpt: { contains: query.search, mode: 'insensitive' } },
+        { tags: { has: query.search } },
+      ];
+    }
+
+    if (query.published !== undefined) {
+      where.published = query.published === 'true';
+    }
+
+    if (query.category) {
+      where.category = query.category;
+    }
+
+    const page = query.page;
+    const limit = query.limit;
+    const skip = (page - 1) * limit;
+
+    const [blogs, total] = await Promise.all([
+      prisma.blog.findMany({
+        where,
+        include: { author: { select: AUTHOR_SELECT } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.blog.count({ where }),
+    ]);
+
+    return NextResponse.json({
+      blogs: blogs.map(serializeBlog),
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    });
+  } catch (error) {
+    console.error('Get blogs error:', error);
+    return NextResponse.json({ error: 'Failed to fetch blogs' }, { status: 500 });
+  }
+});
+
+export const POST = requireAdminSimple(async (request) => {
+  try {
+    const body = await request.json();
+    const data = createBlogSchema.parse(body);
+
+    // Generate slug from title if not provided
+    let slug = data.slug || data.title
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-');
+
+    // Ensure slug is unique
+    let slugExists = await prisma.blog.findFirst({ where: { slug, isDeleted: false } });
+    let counter = 1;
+    const originalSlug = slug;
+
+    while (slugExists) {
+      slug = `${originalSlug}-${counter}`;
+      slugExists = await prisma.blog.findFirst({ where: { slug, isDeleted: false } });
+      counter++;
+    }
+
+    // Get author name from user
+    const authorName = `${request.user?.firstName || ''} ${request.user?.lastName || ''}`.trim() || request.user?.email || 'Admin';
+
+    const blogData: Prisma.BlogUncheckedCreateInput = {
+      title: data.title,
+      slug,
+      excerpt: data.excerpt,
+      content: data.content,
+      category: data.category ?? null,
+      tags: data.tags,
+      published: data.published,
+      publishedAt: data.published && !data.publishedAt
+        ? new Date()
+        : (data.publishedAt ? new Date(data.publishedAt) : null),
+      metaTitle: data.metaTitle ?? null,
+      metaDescription: data.metaDescription ?? null,
+      metaKeywords: data.metaKeywords ?? [],
+      authorId: request.user!.userId,
+      authorName,
+    };
+
+    if (data.featuredImage !== undefined) {
+      blogData.featuredImage = data.featuredImage as Prisma.InputJsonValue;
+    }
+
+    const blog = await prisma.blog.create({
+      data: blogData,
+      include: { author: { select: AUTHOR_SELECT } },
+    });
+
+    // Log audit action (using 'product' as placeholder for blog until audit log is updated)
+    await logAuditAction(
+      request.user!.userId,
+      'create',
+      'product',
+      blog.id,
+      undefined,
+      blog as unknown as Record<string, unknown>,
+      request
+    );
+
+    revalidateJournal(blog.slug);
+    return NextResponse.json({ blog: serializeBlog(blog) }, { status: 201 });
+  } catch (error: unknown) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: 'Invalid input', details: error.errors }, { status: 400 });
+    }
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const target = error.meta?.target;
+      const field = Array.isArray(target) ? target[0] : undefined;
+      const message = field ? `${field} already exists` : 'Duplicate key error';
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+
+    console.error('Create blog error:', error);
+    return NextResponse.json({ error: 'Failed to create blog' }, { status: 500 });
+  }
+});

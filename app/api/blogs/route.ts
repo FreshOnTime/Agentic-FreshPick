@@ -1,0 +1,82 @@
+import { NextResponse, NextRequest } from 'next/server';
+import { z } from 'zod';
+import { Prisma } from '@prisma/client';
+import prisma from '@/lib/prisma';
+import { COMMERCE_BLOG_CATEGORIES, publishedJournalWhere } from '@/lib/journalService';
+
+const querySchema = z.object({
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(12),
+  search: z.string().optional(),
+  category: z.string().optional(),
+  tag: z.string().optional(),
+});
+
+const CACHE_HEADERS = {
+  'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
+};
+
+
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const query = querySchema.parse(Object.fromEntries(searchParams));
+
+    const where: Prisma.BlogWhereInput = {
+      ...publishedJournalWhere,
+    };
+
+    if (query.search) {
+      where.OR = [
+        { title: { contains: query.search, mode: 'insensitive' } },
+        { excerpt: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
+
+    if (query.category && !COMMERCE_BLOG_CATEGORIES.includes(query.category)) {
+      where.category = query.category;
+    }
+
+    if (query.tag) {
+      where.tags = { has: query.tag };
+    }
+
+    const page = query.page;
+    const limit = query.limit;
+    const skip = (page - 1) * limit;
+
+    const [blogs, total] = await Promise.all([
+      prisma.blog.findMany({
+        where,
+        select: {
+          id: true,
+          title: true,
+          slug: true,
+          excerpt: true,
+          featuredImage: true,
+          category: true,
+          tags: true,
+          publishedAt: true,
+          views: true,
+          authorName: true,
+        },
+        orderBy: { publishedAt: { sort: 'desc', nulls: 'last' } },
+        skip,
+        take: limit,
+      }),
+      prisma.blog.count({ where }),
+    ]);
+
+    return NextResponse.json(
+      {
+        blogs: blogs.map(({ id, ...rest }) => ({ _id: id, ...rest })),
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      },
+      { headers: CACHE_HEADERS }
+    );
+  } catch (error) {
+    if (error instanceof z.ZodError) return NextResponse.json({ error: 'Invalid blog query' }, { status: 400 });
+    console.error('Get public blogs error:', error);
+    return NextResponse.json({ error: 'Failed to fetch blogs' }, { status: 500 });
+  }
+}

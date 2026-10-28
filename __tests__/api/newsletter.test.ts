@@ -1,0 +1,16 @@
+import { POST } from '@/app/api/newsletter/route';
+import { POST as unsubscribe } from '@/app/api/newsletter/unsubscribe/route';
+import { readUnsubscribeToken, unsubscribeToken } from '@/lib/newsletterTokens';
+import { sendEmail } from '@/lib/services/mailService';
+const mockTx = {$queryRaw:jest.fn()}, mockUpdate=jest.fn();
+jest.mock('@/lib/prisma',()=>({__esModule:true,default:{$transaction:jest.fn(async(fn:(tx:unknown)=>unknown)=>fn(mockTx)),subscriber:{updateMany:(...args:unknown[])=>mockUpdate(...args)}}}));
+jest.mock('@/lib/services/mailService',()=>({sendEmail:jest.fn().mockResolvedValue(undefined),frontendUrl:()=> 'https://www.freshpick.lk'}));
+jest.mock('@/lib/middleware/rateLimiter',()=>({makeKey:()=>'',isRateLimited:()=>false}));
+const request=(body:unknown)=>new Request('http://localhost/api/newsletter',{method:'POST',body:JSON.stringify(body)});
+beforeEach(()=>{jest.clearAllMocks();mockTx.$queryRaw.mockResolvedValue([{id:'subscriber-1',unsubscribeVersion:0}]);mockUpdate.mockResolvedValue({count:1});});
+it.each(['invalid-email','', 'a'.repeat(255)+'@example.com'])('rejects invalid/oversized address %s',async email=>{expect((await POST(request({email}))).status).toBe(400);expect(mockTx.$queryRaw).not.toHaveBeenCalled();});
+it('queues a welcome with a working signed unsubscribe link inside the transaction',async()=>{expect((await POST(request({email:' New@Example.com ',source:'footer'}))).status).toBe(200);expect(sendEmail).toHaveBeenCalledWith('new@example.com','Welcome to FreshPick',expect.stringContaining('/newsletter/unsubscribe?token='),expect.any(String),{tx:mockTx,dedupeKey:'newsletter-welcome:subscriber-1:0'});});
+it('does not send another welcome for an active duplicate',async()=>{mockTx.$queryRaw.mockResolvedValue([]);expect((await POST(request({email:'new@example.com'}))).status).toBe(200);expect(sendEmail).not.toHaveBeenCalled();});
+it('does not report success when newsletter persistence fails',async()=>{mockTx.$queryRaw.mockRejectedValue(new Error('database unavailable'));expect((await POST(request({email:'new@example.com'}))).status).toBe(500);expect(sendEmail).not.toHaveBeenCalled();});
+it('rejects tampered unsubscribe claims',async()=>{const token=unsubscribeToken('subscriber-1',0);expect(readUnsubscribeToken(token)).toEqual({id:'subscriber-1',version:0});expect(readUnsubscribeToken(token+'x')).toBeNull();expect((await unsubscribe(request({token:token+'x'}))).status).toBe(400);expect(mockUpdate).not.toHaveBeenCalled();});
+it('unsubscribes only the matching signup generation and permits retries',async()=>{const token=unsubscribeToken('subscriber-1',0);expect((await unsubscribe(request({token}))).status).toBe(200);expect(mockUpdate).toHaveBeenCalledWith({where:{id:'subscriber-1',unsubscribeVersion:0},data:{isActive:false,unsubscribedAt:expect.any(Date)}});mockUpdate.mockResolvedValue({count:0});expect((await unsubscribe(request({token}))).status).toBe(410);});

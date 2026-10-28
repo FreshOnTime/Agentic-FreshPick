@@ -1,0 +1,54 @@
+[build]
+  command = "npm run build:netlify"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20.17.0"
+  NEXT_TELEMETRY_DISABLED = "1"
+  NODE_OPTIONS = "--max-old-space-size=4096"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+[functions]
+  # Increase timeout to 60 seconds for file processing (Netlify Pro: up to 26 seconds, Business: up to 60 seconds)
+  # Note: The Next.js plugin manages most settings automatically
+  node_bundler = "esbuild"
+
+# These pre-compressed marketing assets can be delivered directly from the CDN.
+# Keep them fresh within a day if an editor replaces a file under the same name.
+[[headers]]
+  for = "/bgs/*"
+  [headers.values]
+    Cache-Control = "public, max-age=86400, stale-while-revalidate=604800"
+
+[[headers]]
+  for = "/bannermaterial/*.jpg"
+  [headers.values]
+    Cache-Control = "public, max-age=86400, stale-while-revalidate=604800"
+
+# Product uploads use unique filenames. Cache them aggressively so repeat
+# catalogue visits do not re-download the same product photography.
+[[headers]]
+  for = "/uploads/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# These catalogue views contain only public data. Cache their rendered output
+# at the edge so repeat visits and client-side navigations do not wait for a
+# serverless function or the remote database. Query strings are cached as
+# separate variants by the CDN, preserving filters and search results.
+[[headers]]
+  for = "/products"
+  [headers.values]
+    Cache-Control = "public, s-maxage=300, stale-while-revalidate=86400"
+
+[[headers]]
+  for = "/search"
+  [headers.values]
+    Cache-Control = "public, s-maxage=300, stale-while-revalidate=86400"
+
+[[headers]]
+  for = "/categories/*"
+  [headers.values]
+    Cache-Control = "public, s-maxage=300, stale-while-revalidate=86400"

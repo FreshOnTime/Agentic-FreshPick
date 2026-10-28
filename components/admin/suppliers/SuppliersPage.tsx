@@ -1,0 +1,178 @@
+'use client';
+
+import { useState } from 'react';
+import Link from 'next/link';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Plus, Search, MoreHorizontal, Edit, Trash2, Eye, Mail, RefreshCw } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { SupplierDialog } from '@/components/admin/suppliers/SupplierDialog';
+import { AdminMessageSender } from '@/components/admin/AdminMessageSender';
+import { toast } from 'sonner';
+import { authenticatedApiFetch } from '@/lib/api/authenticated-fetch';
+import { useAdminQueue } from '@/components/admin/useAdminQueue';
+import { QueueFeedback } from '@/components/admin/QueueFeedback';
+
+interface Supplier {
+  _id: string;
+  name: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  status: 'active' | 'inactive';
+  createdAt: string;
+}
+
+export function SuppliersPage() {
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const params = new URLSearchParams({ page: String(page), limit: '20', ...(search && { search }) });
+  const queue = useAdminQueue<Supplier>(`/api/admin/suppliers?${params}`, 'suppliers');
+  const { items, loading } = queue;
+  const pagination = { page, limit: 20, total: queue.total, pages: queue.pages };
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<Supplier | null>(null);
+  const [isViewOpen, setIsViewOpen] = useState(false);
+
+  const fetchItems = queue.reload;
+
+  const handleEdit = (s: Supplier) => { setEditing(s); setIsDialogOpen(true); };
+  const handleView = (s: Supplier) => { setEditing(s); setIsViewOpen(true); };
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this supplier?')) return;
+    try {
+      const res = await authenticatedApiFetch(`/api/admin/suppliers/${id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Failed to delete supplier');
+      toast.success('Supplier deleted');
+      fetchItems();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to delete supplier');
+    }
+  };
+
+  const [messageOpen, setMessageOpen] = useState(false);
+
+  const handleMessage = (s: Supplier) => { setEditing(s); setMessageOpen(true); };
+
+  const handleSaved = () => { setIsDialogOpen(false); setEditing(null); fetchItems(); };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-normal text-foreground">Suppliers</h1>
+          <p className="text-muted-foreground mt-2">Manage supplier records</p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+        <Button variant="outline" onClick={fetchItems} disabled={loading}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
+        <Button variant="outline" asChild><Link href="/admin/supplier-applications">Review applications</Link></Button>
+        <Button variant="outline" asChild><Link href="/admin/supplier-uploads">Review supplier uploads</Link></Button>
+        <Button onClick={() => { setEditing(null); setIsDialogOpen(true); }}>
+          <Plus className="h-4 w-4 mr-2" />
+          Add Supplier
+        </Button>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Supplier List</CardTitle>
+          <CardDescription>View and manage suppliers</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center space-x-2 mb-6">
+            <div className="relative flex-1 max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
+              <Input placeholder="Search suppliers..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="pl-10" />
+            </div>
+          </div>
+
+          {queue.error ? <QueueFeedback loading={false} error={queue.error} retry={fetchItems} /> : loading ? (
+            <div className="flex items-center justify-center py-8"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>
+          ) : (
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Contact</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Phone</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="w-[70px]" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {items.map((s) => (
+                    <TableRow key={s._id}>
+                      <TableCell className="font-medium">{s.name}</TableCell>
+                      <TableCell>{s.contactName}</TableCell>
+                      <TableCell>{s.email}</TableCell>
+                      <TableCell>{s.phone}</TableCell>
+                      <TableCell>
+                        <Badge variant={s.status === 'active' ? 'secondary' : 'outline'}>{s.status}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" className="h-8 w-8 p-0">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleView(s)}>
+                              <Eye className="h-4 w-4 mr-2" /> View
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleEdit(s)}>
+                              <Edit className="h-4 w-4 mr-2" /> Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleMessage(s)}>
+                              <Mail className="h-4 w-4 mr-2" /> Message
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleDelete(s._id)} className="text-red-600">
+                              <Trash2 className="h-4 w-4 mr-2" /> Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+
+              {items.length === 0 && <div className="text-center py-8 text-muted-foreground">No suppliers found</div>}
+
+              {pagination.pages > 1 && (
+                <div className="flex items-center justify-between mt-6">
+                  <div className="text-sm text-foreground">
+                    Showing {((pagination.page - 1) * pagination.limit) + 1} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} suppliers
+                  </div>
+                  <div className="flex space-x-2">
+                    <Button variant="outline" onClick={() => setPage(page - 1)} disabled={page <= 1}>Previous</Button>
+                    <Button variant="outline" onClick={() => setPage(page + 1)} disabled={page >= pagination.pages}>Next</Button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <SupplierDialog open={isDialogOpen} onOpenChange={setIsDialogOpen} supplier={editing} onSave={handleSaved} />
+      <SupplierDialog open={isViewOpen} onOpenChange={setIsViewOpen} supplier={editing} onSave={handleSaved} readOnly />
+
+      {editing && (
+        <AdminMessageSender
+          open={messageOpen}
+          onOpenChange={setMessageOpen}
+          supplierId={editing._id}
+          recipientName={editing.name}
+        />
+      )}
+    </div>
+  );
+}

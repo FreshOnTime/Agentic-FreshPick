@@ -1,0 +1,382 @@
+import { randomUUID } from 'crypto';
+import { NextRequest, NextResponse } from 'next/server';
+import prisma from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
+import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
+import { sendEmail } from '@/lib/services/mailService';
+import { requireAuth } from '@/lib/auth';
+import fs from 'fs';
+import path from 'path';
+
+// Configure API route to handle larger payloads (10MB for Excel files)
+export const maxDuration = 60; // 60 seconds timeout
+export const dynamic = 'force-dynamic';
+
+const MAX_CATALOGUE_BYTES = 5 * 1024 * 1024;
+
+// Note: Next API routes with multipart parsing require custom handling.
+// Here we rely on a simple stream-based save for small files from the client.
+
+export const POST = requireAuth(async (request: NextRequest & { user?: { mongoId?: string; userId?: string } }) => {
+  try {
+    // Determine supplierId from the authenticated user record
+    const authUser = request.user;
+    if (!authUser) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+
+    const uid = authUser.mongoId || authUser.userId;
+    const userDoc = uid ? await prisma.user.findUnique({ where: { id: uid } }) : null;
+
+    const resolvedSupplierId = userDoc?.supplierId || null;
+
+    if (!resolvedSupplierId) {
+      return NextResponse.json({ error: 'User is not linked to a supplier account' }, { status: 403 });
+    }
+
+    const approved = await prisma.supplier.findUnique({ where: { id: resolvedSupplierId }, select: { applicationStatus: true, status: true } });
+    if (!approved || approved.applicationStatus !== 'approved' || approved.status !== 'active') return NextResponse.json({ error: 'Your supplier application needs approval before catalogue upload' }, { status: 403 });
+
+    // Support two upload modes:
+    // 1) JSON body containing { fileName, fileData } where fileData is base64 (recommended for all runtimes)
+    // 2) multipart/form-data with a `file` field (legacy, may not work in all environments)
+
+    const contentType = request.headers.get('content-type') || '';
+    let file: File | (Blob & { name?: string; type?: string }) | null = null;
+
+    // Try JSON first (recommended path)
+    if (contentType.includes('application/json')) {
+      try {
+        console.log('[DEBUG] /api/suppliers/upload - Parsing JSON body');
+        const bodyJson = await request.json();
+        const maybeData = bodyJson?.fileData || bodyJson?.data || bodyJson?.file;
+        const maybeName = bodyJson?.fileName || bodyJson?.originalName || bodyJson?.name;
+        const maybeMimeType = bodyJson?.mimeType || bodyJson?.type || '';
+
+        console.log('[DEBUG] /api/suppliers/upload - File name:', maybeName, 'has data:', !!maybeData);
+
+        if (typeof maybeData === 'string' && maybeData.length > 0) {
+          // Expect a base64 string (possibly with data:<mime>;base64,...)
+          const base64 = maybeData.replace(/^data:.*;base64,/, '');
+          const buf = Buffer.from(base64, 'base64');
+
+          console.log('[DEBUG] /api/suppliers/upload - Decoded buffer size:', buf.length);
+
+          // Create a file-like object that works in Node.js (no Blob constructor in Node)
+          // Instead, create an object with the properties we need
+          file = {
+            name: typeof maybeName === 'string' && maybeName.trim() ? maybeName.trim() : `upload-${Date.now()}`,
+            type: maybeMimeType,
+            buffer: buf, // Store the buffer directly
+            arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+          } as unknown as Blob & { name?: string; type?: string; buffer?: Buffer };
+
+          console.log('[DEBUG] /api/suppliers/upload - File object created:', file.name, file.type);
+        }
+      } catch (e) {
+        console.error('[ERROR] /api/suppliers/upload - parsing JSON base64 failed:', e);
+        throw e; // Re-throw to see the actual error
+      }
+    }
+    // Fallback: try multipart/form-data if JSON didn't work
+    else if (contentType.includes('multipart/form-data')) {
+      try {
+        const reqWithForm = request as NextRequest & { formData?: () => Promise<FormData> };
+        if (typeof reqWithForm.formData === 'function') {
+          const form = await reqWithForm.formData();
+          file = (form.get('file') as unknown) as File | (Blob & { name?: string; type?: string }) | null;
+        } else {
+          console.warn('[WARN] /api/suppliers/upload - formData() not available in this runtime');
+        }
+      } catch (err) {
+        console.warn('[WARN] /api/suppliers/upload - formData() parsing failed', err);
+      }
+    }
+
+    if (!file) {
+      console.error('[ERROR] /api/suppliers/upload - No usable file found in request. content-type:', request.headers.get('content-type'));
+      return NextResponse.json({ error: 'File is required (field name should be "file"). If your runtime does not support multipart/form-data, POST JSON with { fileName, fileData (base64) }.' }, { status: 400 });
+    }
+
+    console.log('[DEBUG] /api/suppliers/upload - File object type check:', typeof file);
+
+    // Determine upload directory based on environment
+    // In serverless environments (Netlify, Vercel), use /tmp directory which is writable
+    // In containerized environments, use public/uploads
+    const isServerless = process.env.NETLIFY || process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    let uploadsDir: string;
+    let shouldStoreInDB = false;
+
+    if (isServerless) {
+      // Use /tmp in serverless environments (writable)
+      uploadsDir = path.join('/tmp', 'uploads', 'supplier-uploads');
+      shouldStoreInDB = true; // Store file data in DB since /tmp is ephemeral
+      console.log('[INFO] /api/suppliers/upload - Using serverless tmp directory');
+    } else {
+      // Use public directory in containerized/traditional deployments
+      uploadsDir = path.join(process.cwd(), 'public', 'uploads', 'supplier-uploads');
+      console.log('[INFO] /api/suppliers/upload - Using persistent public directory');
+    }
+
+    // Ensure upload directory exists with proper error handling
+    try {
+      await fs.promises.mkdir(uploadsDir, { recursive: true });
+      // Verify directory is writable
+      await fs.promises.access(uploadsDir, fs.constants.W_OK);
+      console.log('[INFO] /api/suppliers/upload - Upload directory ready:', uploadsDir);
+    } catch (dirErr) {
+      console.error('[ERROR] /api/suppliers/upload - Failed to create/access upload directory:', dirErr);
+      console.error('[ERROR] /api/suppliers/upload - Environment:', {
+        cwd: process.cwd(),
+        isServerless,
+        tmpExists: fs.existsSync('/tmp')
+      });
+      // Last resort: try /tmp if not already using it
+      if (!isServerless) {
+        try {
+          uploadsDir = path.join('/tmp', 'uploads', 'supplier-uploads');
+          await fs.promises.mkdir(uploadsDir, { recursive: true });
+          await fs.promises.access(uploadsDir, fs.constants.W_OK);
+          shouldStoreInDB = true;
+          console.log('[INFO] /api/suppliers/upload - Fallback to /tmp successful');
+        } catch (tmpErr) {
+          console.error('[ERROR] /api/suppliers/upload - /tmp fallback also failed:', tmpErr);
+          return NextResponse.json({
+            error: 'Upload directory not accessible. File system is read-only.',
+            details: process.env.NODE_ENV === 'development' ? String(dirErr) : undefined
+          }, { status: 500 });
+        }
+      } else {
+        return NextResponse.json({
+          error: 'Upload directory not accessible. Please contact administrator.',
+          details: process.env.NODE_ENV === 'development' ? String(dirErr) : undefined
+        }, { status: 500 });
+      }
+    }
+
+    // Get buffer - either from our custom object or from Blob's arrayBuffer
+    let buffer: Buffer;
+    const fileWithBuffer = file as { buffer?: Buffer };
+    if (fileWithBuffer.buffer && Buffer.isBuffer(fileWithBuffer.buffer)) {
+      console.log('[DEBUG] /api/suppliers/upload - Using direct buffer');
+      buffer = fileWithBuffer.buffer;
+    } else if (typeof (file as Blob).arrayBuffer === 'function') {
+      console.log('[DEBUG] /api/suppliers/upload - Using arrayBuffer method');
+      const arrayBuffer = await (file as Blob).arrayBuffer();
+      buffer = Buffer.from(arrayBuffer);
+    } else {
+      console.error('[ERROR] /api/suppliers/upload - File object has no buffer or arrayBuffer method');
+      return NextResponse.json({ error: 'Invalid file object' }, { status: 400 });
+    }
+
+    const fileLike = file as File | (Blob & { name?: string; type?: string });
+    const rawOriginalName = typeof fileLike?.name === 'string' && fileLike.name.trim()
+      ? fileLike.name.trim()
+      : `upload-${Date.now()}`;
+    const originalName = path.basename(rawOriginalName);
+    const safeOriginalName = originalName.replace(/[^a-zA-Z0-9.\-]+/g, '_');
+    const lowerName = safeOriginalName.toLowerCase();
+    const mimeType = typeof fileLike?.type === 'string' && fileLike.type.trim()
+      ? fileLike.type
+      : '';
+
+    if (!lowerName.endsWith('.csv') && !lowerName.endsWith('.xlsx') && !lowerName.endsWith('.xls')) {
+      return NextResponse.json({ error: 'Upload a CSV or Excel catalogue (.csv, .xlsx or .xls).' }, { status: 400 });
+    }
+    if (buffer.length > MAX_CATALOGUE_BYTES) {
+      return NextResponse.json({ error: 'Catalogue files must be 5 MB or smaller.' }, { status: 413 });
+    }
+
+    // Detect MIME type from extension if not provided
+    let detectedMimeType = mimeType;
+    if (!detectedMimeType) {
+      if (lowerName.endsWith('.csv')) {
+        detectedMimeType = 'text/csv';
+      } else if (lowerName.endsWith('.xlsx')) {
+        detectedMimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      } else if (lowerName.endsWith('.xls')) {
+        detectedMimeType = 'application/vnd.ms-excel';
+      } else {
+        detectedMimeType = 'application/octet-stream';
+      }
+    }
+
+    console.log('[INFO] /api/suppliers/upload - File:', originalName, 'MIME:', detectedMimeType, 'Size:', buffer.length);
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const filename = `${uniqueSuffix}-${safeOriginalName}`;
+    const destPath = path.join(uploadsDir, filename);
+
+    try {
+      await fs.promises.writeFile(destPath, buffer);
+      console.log('[DEBUG] /api/suppliers/upload - File written to:', destPath);
+    } catch (writeErr) {
+      console.error('[ERROR] /api/suppliers/upload - Failed to write file:', writeErr);
+      throw new Error('Failed to write file to disk: ' + (writeErr instanceof Error ? writeErr.message : String(writeErr)));
+    }
+
+    // parse preview depending on file type
+    let previewRows: unknown[] = [];
+    try {
+      const isCsv = detectedMimeType === 'text/csv' || lowerName.endsWith('.csv');
+      const isExcel = detectedMimeType.includes('spreadsheet') || detectedMimeType.includes('excel') || lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls');
+
+      console.log('[INFO] /api/suppliers/upload - Parsing preview. isCsv:', isCsv, 'isExcel:', isExcel);
+
+      if (isCsv) {
+        const text = buffer.toString('utf8');
+        const parsed = Papa.parse(text, { header: true, skipEmptyLines: 'greedy', comments: '#', transformHeader: header => header.trim() });
+        previewRows = parsed.data as unknown[];
+        console.log('[INFO] /api/suppliers/upload - CSV parsed, rows:', previewRows.length);
+      } else if (isExcel) {
+        const wb = XLSX.read(buffer, { type: 'buffer' });
+        if (!wb.SheetNames || wb.SheetNames.length === 0) {
+          console.warn('[WARN] /api/suppliers/upload - Excel file has no sheets');
+          previewRows = [];
+        } else {
+          const sheet = wb.Sheets[wb.SheetNames[0]];
+          previewRows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as unknown[];
+          console.log('[INFO] /api/suppliers/upload - Excel parsed, rows:', previewRows.length);
+        }
+      } else {
+        console.warn('[WARN] /api/suppliers/upload - Unknown file type, skipping preview');
+        previewRows = [];
+      }
+    } catch (e) {
+      console.error('[ERROR] /api/suppliers/upload - Failed to parse preview:', e);
+      return NextResponse.json({ error: 'The catalogue could not be read. Use the FreshPick CSV template or a valid Excel workbook.' }, { status: 400 });
+    }
+
+    if (previewRows.length === 0) {
+      return NextResponse.json({ error: 'The catalogue has no product rows. Add at least one product before uploading.' }, { status: 400 });
+    }
+
+    const firstRow = previewRows[0] as Record<string, unknown>;
+    const normalizedHeaders = new Set(Object.keys(firstRow).map(header => header.trim().toLowerCase()));
+    const missingHeaders = ['sku', 'name', 'price'].filter(header => !normalizedHeaders.has(header));
+    if (missingHeaders.length) {
+      return NextResponse.json({
+        error: `Catalogue columns are incorrect. Missing required column(s): ${missingHeaders.join(', ')}. Download the FreshPick template and keep the header row unchanged.`,
+      }, { status: 400 });
+    }
+
+    // attempt to include supplier's business name for easier admin display
+    let supplierName: string | null = null;
+    let supplierCompany: string | null = null;
+    let supplierEmail: string | null = null;
+    let supplierPhone: string | null = null;
+    let supplierContactName: string | null = null;
+    let supplierStatus: string | null = null;
+    try {
+      const s = resolvedSupplierId
+        ? await prisma.supplier.findUnique({ where: { id: resolvedSupplierId } })
+        : null;
+      supplierName = s?.name || null;
+      supplierCompany = s?.name || null;
+      supplierEmail = s?.email || null;
+      supplierPhone = s?.phone || null;
+      supplierContactName = s?.contactName || null;
+      supplierStatus = s?.status || null;
+    } catch {
+      supplierName = null;
+      supplierCompany = null;
+      supplierEmail = null;
+      supplierPhone = null;
+      supplierContactName = null;
+      supplierStatus = null;
+    }
+
+  let uploadDoc: unknown = null;
+    try {
+      const uploadData: Prisma.SupplierUploadUncheckedCreateInput = {
+        supplierId: resolvedSupplierId,
+        supplierName,
+        supplierCompany,
+        supplierEmail,
+        supplierPhone,
+        supplierContactName,
+        supplierStatus,
+        filename,
+        originalName,
+        mimeType: detectedMimeType,
+        size: buffer.length,
+        preview: previewRows.slice(0, 20) as Prisma.InputJsonValue,
+        // In serverless environments, store file data in DB since file system is
+        // ephemeral. In persistent environments, store the file path instead.
+        fileData: shouldStoreInDB ? buffer.toString('base64') : null,
+        path: shouldStoreInDB ? null : `/uploads/supplier-uploads/${filename}`,
+      };
+
+      const created = await prisma.supplierUpload.create({ data: uploadData });
+      // Do not echo the inline base64 fileData back to the browser. On serverless
+      // deployments that can be several megabytes and is only needed by protected
+      // admin download/import endpoints.
+      uploadDoc = {
+        id: created.id,
+        _id: created.id,
+        supplierId: created.supplierId,
+        originalName: created.originalName,
+        filename: created.filename,
+        mimeType: created.mimeType,
+        size: created.size,
+        preview: created.preview,
+        createdAt: created.createdAt,
+      };
+
+      // In-app admin notifications are the reliable primary alert. Email remains
+      // an optional secondary channel controlled by ADMIN_NOTIFICATION_EMAIL.
+      try {
+        const admins = await prisma.user.findMany({
+          where: {
+            isBanned: false,
+            OR: [{ role: 'admin' }, { secondaryRoles: { has: 'admin' } }],
+          },
+          select: { id: true },
+        });
+        if (admins.length) {
+          await prisma.notification.createMany({
+            data: admins.map(admin => ({
+              id: randomUUID(),
+              title: 'Supplier catalogue uploaded',
+              message: `${supplierName || 'A supplier'} uploaded ${originalName} for review and import.`,
+              type: 'info' as const,
+              targetUserId: admin.id,
+              link: '/admin/supplier-uploads',
+            })),
+          });
+        }
+      } catch (notificationError) {
+        console.error('Supplier upload admin notification failed', notificationError);
+      }
+    } catch (dbErr) {
+      console.error('[ERROR] /api/suppliers/upload - Failed to create DB record:', dbErr);
+      const msg = dbErr instanceof Error ? dbErr.message : String(dbErr);
+      return NextResponse.json({ error: 'Failed to save upload record', details: process.env.NODE_ENV === 'development' ? msg : undefined }, { status: 500 });
+    }
+
+    // Notify admin(s)
+    try {
+      const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
+      if (adminEmail) {
+        const html = `<p>Supplier uploaded product file: <strong>${originalName}</strong></p><p>Preview rows: ${JSON.stringify(
+          previewRows.slice(0, 3)
+        )}</p><p><a href="${process.env.FRONTEND_URL}/admin">Open admin dashboard</a></p>`;
+        await sendEmail(adminEmail, 'Supplier Product Upload', html).catch(err => console.error('admin notification error', err));
+      }
+    } catch (e) {
+      console.warn('Notify admin error', e);
+    }
+
+    try {
+      console.log('[INFO] /api/suppliers/upload - Upload successful, doc:', JSON.stringify(uploadDoc));
+    } catch {
+      console.log('[INFO] /api/suppliers/upload - Upload successful (could not stringify uploadDoc)');
+    }
+    return NextResponse.json({ success: true, upload: uploadDoc }, { status: 201 });
+  } catch (error) {
+    console.error('[ERROR] /api/suppliers/upload - Upload failed:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to upload file';
+    return NextResponse.json({
+      error: 'Failed to upload file',
+      details: process.env.NODE_ENV === 'development' ? errorMessage : undefined
+    }, { status: 500 });
+  }
+});
