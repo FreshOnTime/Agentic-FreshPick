@@ -1,17 +1,16 @@
 import { NextRequest } from 'next/server';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { createFreshPickMcpServer } from '@/lib/mcp/server';
+import { consumeSharedRateLimit, publicClientIdentity, SharedRateLimitError } from '@/lib/sharedRateLimit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const limiter = new RateLimiterMemory({ keyPrefix: 'freshpick-mcp', points: 60, duration: 60 });
 
 function trustedOrigins(): Set<string> {
   const configured = [
     'https://freshpick.lk', 'https://www.freshpick.lk', 'https://freshpicknew.netlify.app',
     process.env.URL, process.env.DEPLOY_URL, process.env.DEPLOY_PRIME_URL, process.env.NEXT_PUBLIC_SITE_URL,
+    ...(process.env.VERCEL === '1' ? [process.env.VERCEL_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL].filter(Boolean).map(host => `https://${host}`) : []),
     ...(process.env.MCP_ALLOWED_ORIGINS || '').split(','),
   ];
   return new Set(configured.flatMap((value) => {
@@ -50,11 +49,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   const rejected = validateRequest(request);
   if (rejected) return rejected;
   try {
-    const client = request.headers.get('x-nf-client-connection-ip') || request.headers.get('x-real-ip') || request.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'unknown';
-    await limiter.consume(client);
+    await consumeSharedRateLimit('mcp', publicClientIdentity(request), 60);
   } catch (error) {
-    const ms = (error as { msBeforeNext?: number }).msBeforeNext || 60000;
-    return responseHeaders(protocolError(429, 'Too many MCP requests. Please retry later.', { 'Retry-After': String(Math.ceil(ms / 1000)) }), request);
+    if (error instanceof SharedRateLimitError) return responseHeaders(protocolError(429, 'Too many MCP requests. Please retry later.', { 'Retry-After': String(error.retryAfter) }), request);
+    return responseHeaders(protocolError(503, 'FreshPick could not process this MCP request.'), request);
   }
   const server = createFreshPickMcpServer();
   // A new server and transport per request: no session affinity or customer state.

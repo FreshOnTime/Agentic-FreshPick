@@ -19,6 +19,7 @@
 
 # production
 /build
+/docs-site/
 
 # misc
 .DS_Store

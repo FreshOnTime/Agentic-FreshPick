@@ -1,5 +1,9 @@
 # Agentic FreshPick
 
+**Documentation:** [Documentation site](https://FreshOnTime.github.io/Agentic-FreshPick/) · [Repository guides](docs/README.md) · [Vercel deployment](docs/VERCEL_DEPLOYMENT.md) · [A2A integration](docs/A2A.md).
+
+The disabled-by-default A2A 1.0 pilot adds approved-partner quotations, persisted tasks, follow-ups and retry receipts. It cannot place orders. Public MCP remains read-only with a shared database quota. Apply `20261029010000_partner_quotations` before deploying. A separate GitHub Pages workflow publishes documentation; live APIs still need application hosting.
+
 **FreshPick's complete commerce website, extended with an authenticated AI assistant.**
 
 Copied from [FreshOnTime/newfreshontimewebsite](https://github.com/FreshOnTime/newfreshontimewebsite) at `51a4bb811f78cfac5319fdd82c2d5de09e215559`. Website source and assets are retained; production data, secrets, hosting configuration and remote storage are not copied.

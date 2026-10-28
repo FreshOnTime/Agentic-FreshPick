@@ -74,6 +74,17 @@ jobs:
         npx prisma migrate deploy
         node scripts/verify-agentic-integrity.cjs
 
+    - name: Verify partner quotations against isolated PostgreSQL
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/freshpick_test?schema=a2a_test_ci
+        A2A_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/freshpick_test?schema=a2a_test_ci
+      run: |
+        npx prisma migrate deploy
+        npm run test:a2a-db
+
+    - name: Build and check documentation
+      run: npm run docs:build
+
     - name: Build application
       run: npm run build
       env:

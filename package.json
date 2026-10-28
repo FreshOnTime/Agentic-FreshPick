@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22",
+    "node": ">=22.12",
     "npm": ">=9.0.0"
   },
   "scripts": {
@@ -25,12 +25,16 @@
     "test:unit": "jest --testPathIgnorePatterns=__tests__/smoke",
     "test:checkout-db": "node scripts/verify-checkout-integrity.cjs",
     "check:production": "node scripts/check-platform-readiness.cjs",
-    "test:agentic": "jest --runInBand --runTestsByPath __tests__/lib/agentic.test.ts __tests__/api/agentic.test.ts __tests__/lib/agenticConversations.test.ts"
+    "test:agentic": "jest --runInBand --runTestsByPath __tests__/lib/agentic.test.ts __tests__/api/agentic.test.ts __tests__/lib/agenticConversations.test.ts",
+    "docs:build": "node scripts/build-docs.mjs",
+    "a2a:partner": "node scripts/create-a2a-partner.mjs",
+    "test:a2a-db": "node scripts/verify-a2a-integrity.cjs"
   },
   "prisma": {
     "seed": "node -r esbuild-register prisma/seed.ts"
   },
   "dependencies": {
+    "@a2a-js/sdk": "1.3.0",
     "@hookform/resolvers": "^3.10.0",
     "@leenguyen/react-flip-clock-countdown": "^1.6.1",
     "@modelcontextprotocol/sdk": "1.31.0",
