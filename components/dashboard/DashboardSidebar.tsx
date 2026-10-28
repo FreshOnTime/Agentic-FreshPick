@@ -10,6 +10,7 @@ type IconType = React.ComponentType<{ className?: string }>;
 type NavItem = { name: string; icon: IconType; section?: string; href?: string };
 
 const supplierNav: NavItem[] = [
+  { name: 'Producer assistant', href: '/assistant', icon: Package },
   { name: 'Overview', section: 'overview', icon: LayoutDashboard },
   { name: 'Products', section: 'products', icon: Package },
   { name: 'Messages', section: 'messages', icon: Mail },
@@ -18,6 +19,7 @@ const supplierNav: NavItem[] = [
 ];
 
 const customerNav: NavItem[] = [
+  { name: 'Shopping assistant', href: '/assistant', icon: ShoppingBag },
   { name: 'Overview', section: 'overview', icon: LayoutDashboard },
   { name: 'Orders', href: '/orders', icon: ShoppingBag },
   { name: 'Smart Basket', href: '/profile/subscriptions', icon: Repeat },

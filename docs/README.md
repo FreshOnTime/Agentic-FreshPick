@@ -1,3 +1,7 @@
+# Agentic FreshPick documentation
+
+Start with [Agentic architecture, implemented features and rollout](AGENTIC_ARCHITECTURE.md). The inherited guides below document the underlying commerce application.
+
 # FreshPick documentation
 
 This is the documentation for the application implemented in this repository. Reviewed on **3 October 2026**, against main commit `218a933b31ce7705dd375a8fd7281968f99ffc4c`. It describes source behavior; it is not certification that a deployed site's environment, supplier data, payments or scheduled workers have been verified.

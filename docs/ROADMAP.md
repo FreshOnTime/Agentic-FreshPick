@@ -1,3 +1,5 @@
+> Fork update: the first in-app assistant implementation now exists in Agentic-FreshPick. See [current implementation and remaining stages](AGENTIC_ARCHITECTURE.md). This inherited roadmap describes the broader original plan.
+
 # FreshPick product roadmap: agentic commerce
 
 **Status:** Proposed implementation plan; not an announcement of shipped AI agents.  

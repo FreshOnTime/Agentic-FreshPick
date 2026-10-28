@@ -1,4 +1,23 @@
-# FreshPick
+# Agentic FreshPick
+
+**FreshPick's complete commerce website, extended with an authenticated AI assistant.**
+
+Copied from [FreshOnTime/newfreshontimewebsite](https://github.com/FreshOnTime/newfreshontimewebsite) at `51a4bb811f78cfac5319fdd82c2d5de09e215559`. Website source and assets are retained; production data, secrets, hosting configuration and remote storage are not copied.
+
+Start with the [agentic architecture and rollout guide](docs/AGENTIC_ARCHITECTURE.md). Open **`/assistant`** for shopping, B2B and order help; approved producers and authorized staff see additional workspaces.
+
+| New workflow | Current scope |
+| --- | --- |
+| Shopping assistant | Live catalog tools, budget including delivery, reviewed proposal, explicit confirmation to save a bag |
+| Producer studio | Text/photo listing drafts and missing-field checks; no automatic publishing |
+| Stock & freshness | On-demand low-stock and recorded sell-by recommendations; sampled, not scheduled |
+| Business purchasing | Catalog matching and saved RFQ drafts; no supplier sending or binding purchase orders |
+| Order help | Owned order lookup and explicitly confirmed support-case submission |
+| Bundles & retention | Aggregate sales/consent signals and campaign drafts; no automatic sending |
+
+AI is **disabled by default**. Use Node 22+, apply migrations, configure `AI_GATEWAY_API_KEY` and an available `AGENT_MODEL`, then set `AGENTIC_ENABLED=true` in a separate staging deployment. Provider execution and operational acceptance require live staging verification. Existing COD checkout remains authoritative; the assistant cannot purchase, refund, change stock or send campaigns.
+
+The sections below describe the inherited FreshPick application.
 
 **A Sri Lankan online fresh-food marketplace connecting customers, local producers and the team operating grocery fulfilment.** FreshPick combines a consumer storefront, customer accounts and bags, producer onboarding, catalogue and editorial content, cash-on-delivery checkout, recurring baskets and an extensive back-office administration system.
 
@@ -103,11 +122,11 @@ Start with the [complete documentation index](docs/README.md).
 
 ## Local development
 
-Use Node.js 20.17.0 (the current CI runtime), npm and a dedicated PostgreSQL database.
+Use Node.js 22 (the CI runtime), npm and a dedicated PostgreSQL database.
 
 ```bash
-git clone https://github.com/FreshOnTime/newfreshontimewebsite.git
-cd newfreshontimewebsite
+git clone https://github.com/FreshOnTime/Agentic-FreshPick.git
+cd Agentic-FreshPick
 cp .env.example .env
 ```
 
@@ -121,9 +140,9 @@ npm run dev
 
 Open `http://localhost:3000`. An empty database has no published products or subscription plans. Read the [setup guide](docs/DEVELOPER_GUIDE.md) before seeding data or provisioning the first administrator.
 
-## Planned: agentic commerce
+## Agentic commerce in this fork
 
-The [FreshPick product and agentic-commerce roadmap](docs/ROADMAP.md) sets out the proposed implementation of a budget-aware grocery assistant, reviewable shopping bags, opt-in replenishment, operations/supplier copilots and a future authenticated agent integration. **These workflows are not implemented by the current read-only MCP server.** Existing pricing, stock checks, COD checkout, access controls and explicit user approval remain authoritative.
+The [implemented architecture and rollout guide](docs/AGENTIC_ARCHITECTURE.md) describes the six workspaces, tools, review/confirmation boundaries, configuration and remaining work. The inherited [roadmap](docs/ROADMAP.md) provides broader product context. External MCP remains read-only and is separate from the authenticated in-app assistant.
 
 ## Important product boundaries
 

@@ -33,6 +33,12 @@ export default async function Home() {
   return (
     <div className="bg-background">
       <HeroSection />
+      <section className="editorial-wrap py-8" aria-labelledby="assistant-intro">
+        <div className="flex flex-wrap items-center justify-between gap-5 rounded-2xl bg-secondary p-6 md:p-8">
+          <div><p className="text-xs font-semibold uppercase tracking-widest text-brand-green">A helping hand</p><h2 id="assistant-intro" className="mt-2 text-2xl font-semibold">Your next grocery bag starts with an idea.</h2><p className="mt-2 text-sm text-muted-foreground">Tell us what you need, set a budget and review a suggested basket.</p></div>
+          <Link href="/assistant" className="editorial-button">Meet your assistant <ArrowUpRight className="ml-2 h-4 w-4" /></Link>
+        </div>
+      </section>
       <CategoryBento categories={categories} />
 
       <section aria-labelledby="market-title" className="bg-background pb-14 md:pb-20">

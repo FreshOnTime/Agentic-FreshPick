@@ -2,6 +2,7 @@
 export const MARKET_NAVIGATION = [
   { label: 'Categories', href: '/categories' },
   { label: 'Shop all', href: '/products' },
+  { label: 'Shopping assistant', href: '/assistant' },
   { label: 'Weekly baskets', href: '/subscriptions' },
   { label: 'Our producers', href: '/farm-to-table' },
   { label: 'About', href: '/about' },

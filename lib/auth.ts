@@ -72,7 +72,7 @@ export function requireAuth(handler: (
   request: NextRequest & { user?: { userId: string; email: string; role: string; mongoId?: string } },
   context: any
 ) => Promise<NextResponse> | Promise<Response>) {
-  return async (request: NextRequest, context: any) => {
+  return async (request: NextRequest, context: any = {}) => {
     const user = await verifyToken(request);
 
     if (!user) {
@@ -93,7 +93,7 @@ export function requireAdmin(handler: (
   request: NextRequest & { user?: { userId: string; email: string; role: string; mongoId?: string } },
   context: any
 ) => Promise<NextResponse> | Promise<Response>) {
-  return async (request: NextRequest, context: any) => {
+  return async (request: NextRequest, context: any = {}) => {
     const user = await verifyToken(request);
 
     if (!user) {

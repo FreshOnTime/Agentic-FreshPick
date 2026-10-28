@@ -1,9 +1,9 @@
 {
-  "name": "fot-frontend",
+  "name": "agentic-freshpick",
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=18.17.0",
+    "node": ">=22",
     "npm": ">=9.0.0"
   },
   "scripts": {
@@ -24,7 +24,8 @@
     "db:studio": "prisma studio",
     "test:unit": "jest --testPathIgnorePatterns=__tests__/smoke",
     "test:checkout-db": "node scripts/verify-checkout-integrity.cjs",
-    "check:production": "node scripts/check-platform-readiness.cjs"
+    "check:production": "node scripts/check-platform-readiness.cjs",
+    "test:agentic": "jest --runInBand --runTestsByPath __tests__/lib/agentic.test.ts __tests__/api/agentic.test.ts"
   },
   "prisma": {
     "seed": "node -r esbuild-register prisma/seed.ts"
@@ -53,6 +54,7 @@
     "@sendgrid/mail": "^8.1.5",
     "@tanstack/react-table": "^8.21.3",
     "@types/papaparse": "^5.3.16",
+    "ai": "7.0.155",
     "bcryptjs": "^2.4.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

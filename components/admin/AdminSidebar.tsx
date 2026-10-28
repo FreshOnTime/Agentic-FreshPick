@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 const groups = [
   { name: 'Store', items: [
     { name: 'Overview', href: '/admin', icon: LayoutDashboard },
+    { name: 'AI workspace', href: '/assistant', icon: MessageSquare },
     { name: 'Orders', href: '/admin/orders', icon: ShoppingCart },
     { name: 'Products', href: '/admin/products', icon: Package },
     { name: 'Categories', href: '/admin/categories', icon: Tags },

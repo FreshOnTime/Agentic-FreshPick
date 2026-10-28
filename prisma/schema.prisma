@@ -916,3 +916,36 @@ model EmailOutbox {
   @@index([status, nextAttemptAt])
   @@map("email_outbox")
 }
+
+// Agent proposals are inert until an authenticated customer confirms a supported action.
+model AgentRun {
+  id String @id @default(uuid())
+  userId String
+  mode String
+  status String @default("running")
+  inputTokens Int @default(0)
+  outputTokens Int @default(0)
+  toolNames String[] @default([])
+  createdAt DateTime @default(now())
+  finishedAt DateTime?
+  drafts AgentDraft[]
+  @@index([userId, createdAt])
+  @@map("agent_runs")
+}
+
+model AgentDraft {
+  id String @id @default(uuid())
+  userId String
+  runId String
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  kind String
+  title String
+  payload Json
+  status String @default("pending")
+  resultId String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
+  @@index([runId])
+  @@map("agent_drafts")
+}
